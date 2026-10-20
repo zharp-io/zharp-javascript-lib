@@ -14,6 +14,9 @@ export interface LogEntry {
   metadata?: Record<string, any>;
 }
 
+/** A console method `captureConsole` can copy to Zharp. */
+export type ConsoleMethod = 'log' | 'info' | 'warn' | 'error' | 'debug';
+
 export interface AutoCaptureOptions {
   /** Capture window.onerror / process.uncaughtException — unhandled JS errors. Default: true */
   errors?: boolean;
@@ -61,6 +64,18 @@ export interface ZharpConfig {
   maxBatchSize?: number;
   /** Auto-capture browser errors. All options default to true except consoleErrors */
   autoCapture?: AutoCaptureOptions;
+  /**
+   * Also send what the app writes to the console: `'all'`, or the methods to copy, e.g.
+   * `['warn', 'error']`. Off by default. The console output itself is unchanged.
+   *
+   * console.log and console.info become `info` logs, warn `warn`, error `error`, debug `debug`.
+   * In Node it falls back to `ZHARP_CAPTURE_CONSOLE` (`all`, or a list such as `warn,error`).
+   *
+   * Turn it on where nothing else collects the app's output — a browser, a serverless function,
+   * a process with no Zharp agent. Where the agent already collects stdout, every line would
+   * arrive twice.
+   */
+  captureConsole?: 'all' | ConsoleMethod[] | false;
   /**
    * App version string e.g. '1.4.2'. Sent as the `version` tag of every log (and kept under
    * context.appVersion). In Node it falls back to `ZHARP_VERSION`.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+
+- **`captureConsole`** — also send what the app writes to the console: `'all'`, or the methods to
+  copy, e.g. `['warn', 'error']`. Off by default; the console output is unchanged. In Node,
+  `ZHARP_CAPTURE_CONSOLE` (`all` or `warn,error`) turns it on without code. `log`/`info` become
+  `info` logs, `warn` `warn`, `error` `error`, `debug` `debug`; an Error argument's stack is kept
+  in the metadata. The SDK's own `[Zharp]` lines are never sent, and the activation line says when
+  the console is captured.
+
 ## 1.1.0
 
 Everything since 1.0.9, the last published release. Versions 1.1.0 to 1.4.0 of this package were

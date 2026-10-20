@@ -26,6 +26,8 @@ export interface EnvConfig {
   version?: string;
   source?: string;
   endpoint?: string;
+  /** Raw `ZHARP_CAPTURE_CONSOLE`: `all`, or a list such as `warn,error`. */
+  captureConsole?: string;
 }
 
 /**
@@ -39,6 +41,7 @@ export interface EnvConfig {
  * | `version`     | `ZHARP_VERSION`                             |
  * | `source`      | `ZHARP_SOURCE`                              |
  * | `endpoint`    | `ZHARP_ENDPOINT`                            |
+ * | `captureConsole` | `ZHARP_CAPTURE_CONSOLE` (logs only)      |
  */
 export function readEnv(): EnvConfig {
   return {
@@ -48,6 +51,7 @@ export function readEnv(): EnvConfig {
     version: nodeEnv('ZHARP_VERSION'),
     source: nodeEnv('ZHARP_SOURCE'),
     endpoint: nodeEnv('ZHARP_ENDPOINT'),
+    captureConsole: nodeEnv('ZHARP_CAPTURE_CONSOLE'),
   };
 }
 

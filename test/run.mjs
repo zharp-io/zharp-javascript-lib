@@ -496,6 +496,53 @@ console.log('\nExit without destroy (exit-without-destroy.cjs)');
   });
 }
 
+// ── captureConsole ───────────────────────────────────────────────────────────
+
+console.log('\nConsole capture (console-capture.cjs)');
+{
+  const all = await run('console-capture.cjs', {}, ['all']);
+  await run('console-capture.cjs', {}, ['list']);
+  await run('console-capture.cjs', { ZHARP_API_KEY: 'test-key-console-env', ZHARP_CAPTURE_CONSOLE: 'warn,error' }, ['env']);
+  await run('console-capture.cjs', {}, ['off']);
+  const sent = (mode) => entriesOf(logRequests(`test-key-console-${mode}`));
+  const pairs = (mode) => sent(mode).map((e) => `${e.level} ${e.message}`).sort();
+
+  check("'all' sends every console method at its level, and the console still prints", () => {
+    assert.deepEqual(pairs('all'), [
+      'debug debug line',
+      'error TypeError: bad thing while saving',
+      'info info line',
+      'info plain line {"a":1}',
+      'warn careful',
+    ]);
+    assert.match(all.stdout, /plain line/);
+    assert.match(all.stdout, /Logging active — .*capturing the console/);
+  });
+  check('an Error argument puts its stack in the metadata', () => {
+    const e = sent('all').find((x) => x.level === 'error');
+    assert.equal(e.metadata.origin, 'console');
+    assert.equal(e.metadata.consoleMethod, 'error');
+    assert.equal(e.metadata.name, 'TypeError');
+    assert.match(e.metadata.stack, /TypeError: bad thing/);
+  });
+  check('with consoleErrors on as well, console.error is still sent once', () => {
+    assert.equal(sent('all').filter((x) => x.level === 'error').length, 1);
+  });
+  check('the SDK\'s own "[Zharp]" lines are never sent', () => {
+    assert.ok(sent('all').every((e) => !e.message.startsWith('[Zharp]')));
+  });
+  check('a list sends only those methods', () => {
+    assert.deepEqual(pairs('list'), ['error TypeError: bad thing while saving', 'warn careful']);
+  });
+  check('ZHARP_CAPTURE_CONSOLE=warn,error does the same from the environment', () => {
+    assert.deepEqual(pairs('env'), ['error TypeError: bad thing while saving', 'warn careful']);
+  });
+  check('off by default; and after destroy() the console is no longer copied', () => {
+    assert.deepEqual(sent('off'), []);
+    assert.ok(sent('all').every((e) => e.message !== 'after destroy'));
+  });
+}
+
 // ── a crashing Node app still crashes ────────────────────────────────────────
 
 /** Run a fixture and report how it ended, whatever the exit code. */

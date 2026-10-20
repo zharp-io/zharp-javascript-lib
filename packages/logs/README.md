@@ -119,6 +119,7 @@ ZharpLogger.error('Payment failed', { orderId: 99, reason: 'insufficient_funds' 
 | `ZHARP_VERSION` | `appVersion` | |
 | `ZHARP_SOURCE` | `source` | |
 | `ZHARP_ENDPOINT` | `endpoint` | Default `https://api.zharp.io/api/v1` |
+| `ZHARP_CAPTURE_CONSOLE` | `captureConsole` | `all`, or a list such as `warn,error` |
 | `ZHARP_DISABLED` | — | `true`, `1`, `yes` or `on`: start nothing |
 
 A browser reads none of them — bundles often carry a `process.env` baked in at build time, which
@@ -154,6 +155,7 @@ ZharpLogger.init({
   endpoint: 'https://api.zharp.io/api/v1', // Zharp API base URL. Default shown
   flushInterval: 5000,          // How often to flush the queue (ms). Default: 5000
   maxBatchSize: 50,             // Max logs taken from the queue per flush. Default: 50
+  captureConsole: false,        // Also send console output: 'all' or e.g. ['warn', 'error']. Default: off
 
   // Auto-capture (all enabled by default except consoleErrors)
   autoCapture: {
@@ -201,6 +203,37 @@ ZharpLogger.init({
   },
 });
 ```
+
+---
+
+## Console output
+
+Off by default. Turn it on and what the app writes to the console is sent too — the console
+still prints exactly as before:
+
+```typescript
+ZharpLogger.init({ apiKey: '...', service: 'checkout-web', captureConsole: 'all' });
+// or only some methods
+ZharpLogger.init({ apiKey: '...', service: 'checkout-web', captureConsole: ['warn', 'error'] });
+```
+
+In Node, `ZHARP_CAPTURE_CONSOLE=all` (or `warn,error`) does the same with no code change.
+
+| Console method | Log level |
+|---|---|
+| `console.log`, `console.info` | `info` |
+| `console.warn` | `warn` |
+| `console.error` | `error` |
+| `console.debug` | `debug` |
+
+Arguments are joined as the console shows them; an `Error` reads `TypeError: …` in the message and
+its stack goes in the metadata, next to `origin: 'console'` and `consoleMethod`. The SDK's own
+`[Zharp]` lines are never sent. With `'error'` in the list, `autoCapture.consoleErrors` is not
+needed — each call is sent once. The activation line says when the console is being captured.
+
+**Where it fits:** a browser, a serverless function, or a server with nothing else collecting its
+output. Where the [Zharp agent](https://zharp.io/docs/agent/setup) already collects the app's
+stdout — Docker, journald, PM2, Kubernetes — leave it off, or every line arrives twice.
 
 ---
 

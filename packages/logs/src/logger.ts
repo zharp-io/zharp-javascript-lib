@@ -2,6 +2,7 @@ import { ZharpConfig, LogEntry, LogLevel, AutoCaptureOptions } from './types';
 import { LogQueue } from './queue';
 import { Transport } from './transport';
 import { setupAutoCapture } from './auto-capture';
+import { consoleMethodsOf, setupConsoleCapture } from './console-capture';
 import { getRuntimeContext, refreshContext } from './context';
 import { getSessionId } from '@zharp/internal/session';
 import { normalizeEndpoint } from '@zharp/internal/delivery';
@@ -28,6 +29,7 @@ export class ZharpLoggerClass {
   /** Sends under way, so a crashing process can wait for them before it exits. */
   private sending = new Set<Promise<void>>();
   private teardownAutoCapture: (() => void) | null = null;
+  private teardownConsoleCapture: (() => void) | null = null;
   /** What this instance put on the shared handle, so teardown removes its own entry and no other. */
   private published: PublishedConfig | null = null;
   private initialized = false;
@@ -118,11 +120,21 @@ export class ZharpLoggerClass {
     this.queue = new LogQueue(500);
     this.transport = new Transport(this.config.apiKey, this.config.endpoint);
 
+    // Console capture, when asked for. It covers console.error too when that is in the list, so
+    // the older `consoleErrors` switch is not applied on top of it — every call is sent once.
+    const consoleMethods = consoleMethodsOf(config.captureConsole ?? env.captureConsole);
+    const autoCapture = consoleMethods.includes('error')
+      ? { ...this.config.autoCapture, consoleErrors: false }
+      : this.config.autoCapture;
+
     // Wire up auto-capture. The handler just calls this.push() like a normal log.
     this.teardownAutoCapture = setupAutoCapture(
       (message, metadata) => this.push('error', this.config!.service, message, metadata),
-      this.config.autoCapture,
+      autoCapture,
       () => this.flushAll(),
+    );
+    this.teardownConsoleCapture = setupConsoleCapture(consoleMethods, (level, message, metadata) =>
+      this.push(level, this.config!.service, message, metadata),
     );
 
     // Flush on a regular interval (default every 5 seconds). In Node the timer must not keep the
@@ -154,7 +166,8 @@ export class ZharpLoggerClass {
     shared().logs = this.published;
 
     this.initialized = true;
-    announce(`Logging active — ${describeTarget(this.config.service, this.config.environment)}`);
+    const capturing = consoleMethods.length === 0 ? '' : consoleMethods.length === 5 ? ', capturing the console' : `, capturing console.${consoleMethods.join('/')}`;
+    announce(`Logging active — ${describeTarget(this.config.service, this.config.environment)}${capturing}`);
   }
 
   /** Whether `init()` succeeded and logs are being sent. */
@@ -367,6 +380,10 @@ export class ZharpLoggerClass {
     if (this.teardownAutoCapture) {
       this.teardownAutoCapture();
       this.teardownAutoCapture = null;
+    }
+    if (this.teardownConsoleCapture) {
+      this.teardownConsoleCapture();
+      this.teardownConsoleCapture = null;
     }
     if (typeof window !== 'undefined') {
       window.removeEventListener('visibilitychange', this.handleVisibilityChange);

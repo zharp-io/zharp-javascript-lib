@@ -1,6 +1,6 @@
 export { ZharpLoggerClass } from './logger';
 export { getSessionId, resetSessionId } from '@zharp/internal/session';
-export type { ZharpConfig, LogEntry, LogLevel, AutoCaptureOptions } from './types';
+export type { ZharpConfig, LogEntry, LogLevel, AutoCaptureOptions, ConsoleMethod } from './types';
 export { VERSION } from './version';
 
 import { ZharpLoggerClass } from './logger';
