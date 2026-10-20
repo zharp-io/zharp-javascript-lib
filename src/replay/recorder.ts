@@ -1,14 +1,37 @@
 import { record } from 'rrweb';
 import type { eventWithTime } from '@rrweb/types';
 import { getSessionId } from '../session';
+import { MAX_BEACON_BYTES, MAX_FETCH_BYTES, normalizeEndpoint, postJson, sendOnUnload, splitBySize } from '../delivery';
 
-const SDK_VERSION = '1.3.0';
+/** Attempts a batch gets — across flushes — before it is given up on. */
+const MAX_ATTEMPTS = 3;
+
+/**
+ * Batches cut but not yet delivered. While the network is down they pile up, one per flush; past
+ * this the oldest go, because the recording has to stay bounded in memory.
+ */
+const MAX_PENDING = 30;
+
+/**
+ * A batch, fixed at the moment it is cut.
+ *
+ * The body — sequence number included — never changes afterwards, so a retry is the same
+ * request again. The backend stores one chunk per (session, sequence) and treats a repeat as a
+ * duplicate, so a retry that reused a sequence for different events lost those events.
+ */
+interface ReplayBatch {
+    sequence: number;
+    body: string;
+    attempts: number;
+}
 
 export interface ReplayOptions {
     /** Your Zharp API key. Defaults to the one `ZharpLogger.init()` was given. */
     apiKey?: string;
     /** Service name the recording is filed under. Defaults to the logger's. */
     service?: string;
+    /** Base URL of the Zharp API. Defaults to the logger's `endpoint`, then 'https://api.zharp.io/api/v1'. */
+    endpoint?: string;
 
     /**
      * Fraction of sessions to record, 0 to 1. Default: 1.
@@ -58,7 +81,12 @@ export interface ReplayOptions {
 export class ReplayRecorder {
     private stopRecording: (() => void) | null = null;
     private buffer: eventWithTime[] = [];
+    /** Batches cut and numbered, oldest first, waiting to be delivered. */
+    private pending: ReplayBatch[] = [];
+    /** The next sequence number. Only ever goes up: a number is spent when a batch is cut. */
     private sequence = 0;
+    /** The flush currently running. There is never more than one. */
+    private inFlight: Promise<void> | null = null;
     private flushTimer: ReturnType<typeof setInterval> | null = null;
     private options: Required<Pick<ReplayOptions, 'sampleRate' | 'flushInterval' | 'maskAllInputs'>> & ReplayOptions = {
         sampleRate: 1,
@@ -67,6 +95,7 @@ export class ReplayRecorder {
     };
 
     private endpoint = '';
+    private apiKey = '';
     private service = 'unknown';
     /** Sticky: once a session has seen an error it stays flagged, so it can be found later. */
     private sawError = false;
@@ -103,7 +132,8 @@ export class ReplayRecorder {
         if (this.options.sampleRate < 1 && Math.random() >= this.options.sampleRate) return;
 
         this.service = options.service ?? readLoggerConfig('service') ?? 'unknown';
-        this.endpoint = `https://api.zharp.io/api/v1/agent/replay/${apiKey}`;
+        this.apiKey = apiKey;
+        this.endpoint = normalizeEndpoint(options.endpoint ?? readLoggerConfig('endpoint'));
 
         this.stopRecording = record({
             emit: (event) => {
@@ -182,52 +212,96 @@ export class ReplayRecorder {
         if (this.traceIds.size < 50) this.traceIds.add(traceId);
     }
 
-    /** Ship what has been recorded so far. */
+    /**
+     * Ship what has been recorded so far.
+     *
+     * One flush at a time. A flush called while another is running — the timer firing during a
+     * slow upload, the 500-event threshold tripping mid-retry — waits for it and then runs, so
+     * two flushes never send the same batch at once or deliver batches out of order.
+     */
     async flush(): Promise<void> {
-        if (!this.buffer.length || !this.endpoint) return;
+        while (this.inFlight) await this.inFlight;
+
+        this.inFlight = this.deliver();
+        try {
+            await this.inFlight;
+        } finally {
+            this.inFlight = null;
+        }
+    }
+
+    // ── internals ─────────────────────────────────────────────────────────
+
+    /** Send pending batches in order, stopping at the first that has to wait for a retry. */
+    private async deliver(): Promise<void> {
+        this.cut(MAX_FETCH_BYTES);
+        if (!this.endpoint) return;
+
+        while (this.pending.length) {
+            const batch = this.pending[0];
+            const outcome = await this.post(batch);
+
+            // An unload may have beaconed and cleared the queue while this request was out.
+            if (this.pending[0] !== batch) continue;
+
+            if (outcome === 'retry') {
+                batch.attempts += 1;
+                // Still worth another try: leave it at the head, unchanged, for the next flush.
+                // Retrying now would mostly fail for the same reason a moment later.
+                if (batch.attempts < MAX_ATTEMPTS) return;
+            }
+            // Delivered, rejected, or out of attempts. A dropped batch takes its sequence number
+            // with it — the next batch keeps its own, so nothing is ever filed under a number
+            // that was already used for different events.
+            this.pending.shift();
+        }
+    }
+
+    private async post(batch: ReplayBatch): Promise<'done' | 'retry'> {
+        try {
+            const response = await postJson(this.endpoint, 'replay', this.apiKey, batch.body);
+            // Only a server-side failure is retried: a rejected batch will be rejected again, and
+            // retrying it forever would block everything recorded after it.
+            return !response.ok && response.status >= 500 ? 'retry' : 'done';
+        } catch {
+            return 'retry';
+        }
+    }
+
+    /**
+     * Turn the buffer into numbered batches of at most `limit` bytes.
+     *
+     * The sequence is assigned here, once. `beforeSend` sees the events before any number is
+     * spent, so a batch it drops leaves no gap.
+     */
+    private cut(limit: number): void {
+        if (!this.buffer.length) return;
 
         const events = this.buffer;
         this.buffer = [];
 
         if (this.options.beforeSend && this.options.beforeSend(events) === false) return;
 
-        const body = this.envelope(events);
+        const first = this.sequence;
+        const chunks = splitBySize(events, limit, (group, index) => this.envelope(group, first + index));
+        this.sequence += chunks.length;
 
-        try {
-            const response = await fetch(this.endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Zharp-SDK': `js/${SDK_VERSION}` },
-                body,
-                // Marks this as the SDK's own call so the fetch instrumentation does not trace
-                // it — a traced upload would produce spans describing the upload of spans.
-                ...({ __zharp: true } as any),
-            });
-            if (!response.ok && response.status >= 500) {
-                // Put them back for the next flush. Only for a server-side failure: a rejected
-                // batch will be rejected again, and retrying it forever would block everything
-                // recorded after it.
-                this.buffer = events.concat(this.buffer);
-                this.sequence -= 1;
-            }
-        } catch {
-            this.buffer = events.concat(this.buffer);
-            this.sequence -= 1;
-        }
+        chunks.forEach(({ body }, index) => this.pending.push({ sequence: first + index, body, attempts: 0 }));
+
+        if (this.pending.length > MAX_PENDING) this.pending.splice(0, this.pending.length - MAX_PENDING);
     }
 
-    // ── internals ─────────────────────────────────────────────────────────
-
-    private envelope(events: eventWithTime[]): string {
-        return JSON.stringify({
+    private envelope(events: eventWithTime[], sequence: number): Record<string, unknown> {
+        return {
             sessionId: getSessionId(),
             service: this.service,
-            sequence: this.sequence++,
+            sequence,
             url: window.location.href,
             userAgent: navigator.userAgent,
             hasError: this.sawError,
             traceIds: Array.from(this.traceIds),
             events,
-        });
+        };
     }
 
     private handleVisibilityChange = (): void => {
@@ -245,16 +319,21 @@ export class ReplayRecorder {
      * user left, which is often the thing that made them leave.
      */
     private sendBeacon(): void {
-        if (!this.buffer.length || !this.endpoint) return;
+        if (!this.endpoint) return;
         if (typeof navigator === 'undefined' || !navigator.sendBeacon) {
             this.flush().catch(() => {});
             return;
         }
 
-        const events = this.buffer;
-        this.buffer = [];
-        const body = this.envelope(events);
-        navigator.sendBeacon(this.endpoint, new Blob([body], { type: 'application/json' }));
+        // New events are cut to beacon size. Batches already numbered go as they are — larger
+        // than a beacon allows, they fall back to an ordinary request rather than being renumbered.
+        // One that is also in flight right now may arrive twice; the backend keeps the first.
+        this.cut(MAX_BEACON_BYTES);
+        if (!this.pending.length) return;
+
+        const bodies = this.pending.map((batch) => batch.body);
+        this.pending = [];
+        sendOnUnload(this.endpoint, 'replay', this.apiKey, bodies);
     }
 }
 
@@ -264,7 +343,7 @@ export class ReplayRecorder {
  * Reaching through a global rather than importing the logger keeps this entry point from
  * pulling the whole logging SDK into a bundle that only wanted the recorder.
  */
-function readLoggerConfig(key: 'apiKey' | 'service'): string | undefined {
+function readLoggerConfig(key: 'apiKey' | 'service' | 'endpoint'): string | undefined {
     const shared = (globalThis as any).__ZHARP__;
     return shared?.[key];
 }

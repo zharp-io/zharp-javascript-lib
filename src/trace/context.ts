@@ -1,4 +1,5 @@
 import { SpanContext } from './types';
+import { loadBuiltin } from './builtins';
 
 /**
  * Where the currently active span lives.
@@ -10,7 +11,8 @@ import { SpanContext } from './types';
  * cheaper.
  *
  * The Node import is guarded rather than static: this bundle is neutral-platform and must load
- * in a browser, where `node:async_hooks` does not exist.
+ * in a browser, where `node:async_hooks` does not exist. It goes through `loadBuiltin` so the
+ * ESM build finds it too — see builtins.ts.
  */
 
 interface Storage {
@@ -39,13 +41,10 @@ function fallbackStorage(): Storage {
 
 function nodeStorage(): Storage | null {
   try {
-    // Indirect require so bundlers targeting the browser do not try to resolve it.
-    const req = typeof module !== 'undefined' && typeof require === 'function' ? require : null;
-    if (!req) return null;
-    const { AsyncLocalStorage } = req('async_hooks');
+    const AsyncLocalStorage = loadBuiltin('async_hooks')?.AsyncLocalStorage;
     if (!AsyncLocalStorage) return null;
 
-    // `req` is deliberately untyped so this file does not depend on @types/node being present
+    // The module is deliberately untyped so this file does not depend on @types/node being present
     // in the consuming project, which means the store is typed at the boundary instead.
     const als: {
       getStore(): SpanContext | null | undefined;

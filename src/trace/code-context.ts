@@ -1,3 +1,5 @@
+import { loadBuiltin } from './builtins';
+
 /**
  * The source lines around the place an exception was thrown.
  *
@@ -69,10 +71,11 @@ function readLines(file: string): string[] | null {
 
     let lines: string[] | null = null;
     try {
-        // Indirect so a browser bundler does not try to resolve `fs`.
-        const req = typeof require === 'function' ? require : null;
-        if (req) {
-            const contents: string = req('fs').readFileSync(file, 'utf8');
+        // Through loadBuiltin so a browser bundler does not try to resolve `fs`, and so the ESM
+        // build, which has no `require`, can read files too.
+        const fs = loadBuiltin('fs');
+        if (fs) {
+            const contents: string = fs.readFileSync(file, 'utf8');
             lines = contents.split(/\r?\n/);
         }
     } catch {

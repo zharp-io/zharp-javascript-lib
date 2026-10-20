@@ -1,12 +1,8 @@
 import { SpanRecord } from './types';
+import { MAX_BEACON_BYTES, MAX_FETCH_BYTES, postJson, sendOnUnload, splitBySize } from '../delivery';
 
-const SDK_VERSION = '1.1.0';
-
-function detectEnvironment(): string {
-  if (typeof window !== 'undefined') return 'browser';
-  if (typeof process !== 'undefined' && process.platform) return process.platform;
-  return 'unknown';
-}
+// The flat shape the backend reads for SDK spans. Resource attributes travel on each span.
+const envelope = (spans: SpanRecord[]) => ({ spans });
 
 /**
  * Ships finished spans to Zharp.
@@ -17,11 +13,11 @@ function detectEnvironment(): string {
  */
 export class TraceTransport {
   private readonly endpoint: string;
-  private readonly service: string;
+  private readonly apiKey: string;
 
-  constructor(apiKey: string, service: string) {
-    this.endpoint = `https://api.zharp.io/api/v1/agent/traces/${apiKey}`;
-    this.service = service;
+  constructor(apiKey: string, endpoint: string) {
+    this.apiKey = apiKey;
+    this.endpoint = endpoint;
   }
 
   /**
@@ -35,24 +31,8 @@ export class TraceTransport {
    */
   async send(spans: SpanRecord[]): Promise<void> {
     if (!spans.length) return;
-
-    const body = JSON.stringify({
-      hostname: this.service,
-      os: detectEnvironment(),
-      version: SDK_VERSION,
-      spans,
-    });
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await this.post(body);
-        // A 4xx will not be fixed by sending it again — a bad key stays bad, and an oversized
-        // batch stays oversized. Only a server-side failure is worth a second attempt.
-        if (response.ok || response.status < 500) return;
-      } catch {
-        // Network failure; fall through and retry once.
-      }
-      if (attempt === 0) await sleep(1000);
+    for (const { body } of splitBySize(spans, MAX_FETCH_BYTES, envelope)) {
+      await this.sendBody(body);
     }
   }
 
@@ -63,32 +43,26 @@ export class TraceTransport {
   sendBeacon(spans: SpanRecord[]): void {
     if (!spans.length) return;
 
-    const body = JSON.stringify({
-      hostname: this.service,
-      os: detectEnvironment(),
-      version: SDK_VERSION,
-      spans,
-    });
-
     if (typeof navigator === 'undefined' || !navigator.sendBeacon) {
       this.send(spans).catch(() => {});
       return;
     }
-    navigator.sendBeacon(this.endpoint, new Blob([body], { type: 'application/json' }));
+    const bodies = splitBySize(spans, MAX_BEACON_BYTES, envelope).map((chunk) => chunk.body);
+    sendOnUnload(this.endpoint, 'traces', this.apiKey, bodies);
   }
 
-  private post(body: string): Promise<Response> {
-    return fetch(this.endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Zharp-SDK': `js/${SDK_VERSION}`,
-      },
-      body,
-      // Marks the request as this SDK's own so the fetch instrumentation skips it. Without it
-      // reporting spans would produce spans, which would be reported.
-      ...({ __zharp: true } as any),
-    });
+  private async sendBody(body: string): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await postJson(this.endpoint, 'traces', this.apiKey, body);
+        // A 4xx will not be fixed by sending it again — a bad key stays bad, and an oversized
+        // batch stays oversized. Only a server-side failure is worth a second attempt.
+        if (response.ok || response.status < 500) return;
+      } catch {
+        // Network failure; fall through and retry once.
+      }
+      if (attempt === 0) await sleep(1000);
+    }
   }
 }
 

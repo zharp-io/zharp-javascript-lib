@@ -12,15 +12,32 @@ import { fromTraceparent, toTraceparent } from './trace/context';
 import { SpanContext, SpanOptions } from './trace/types';
 import { addBreadcrumb, breadcrumbs, clearBreadcrumbs, watchBrowserActivity } from './trace/breadcrumbs';
 import type { Breadcrumb } from './trace/breadcrumbs';
+import { normalizeEndpoint } from './delivery';
+import { toMessage } from './message';
 
 const LEVELS = new Set(['debug', 'info', 'warn', 'error', 'fatal']);
 
-// Internal config type: all fields resolved to concrete values, appVersion stays optional.
-type ResolvedConfig = Required<Omit<ZharpConfig, 'appVersion' | 'autoCapture' | 'tracing'>> & {
+// Internal config type: required fields resolved to concrete values; the tags stay optional
+// because "not configured" is a real answer — it is sent as no tag rather than a guessed one.
+type ResolvedConfig = Required<Pick<ZharpConfig, 'apiKey' | 'service' | 'flushInterval' | 'maxBatchSize' | 'endpoint'>> & {
+  environment?: string;
   appVersion?: string;
+  source?: string;
   autoCapture: Required<AutoCaptureOptions>;
   tracing?: ZharpConfig['tracing'];
 };
+
+/**
+ * An environment variable, in Node only.
+ *
+ * Browser bundles often carry a `process` shim whose `env` was baked in at build time — reading
+ * it there would tag a page with the build machine's NODE_ENV — so a browser reads nothing.
+ */
+function nodeEnv(name: string): string | undefined {
+  if (typeof window !== 'undefined' || typeof process === 'undefined' || !process.env) return undefined;
+  const value = process.env[name];
+  return value && value.trim() ? value.trim() : undefined;
+}
 
 
 export class ZharpLoggerClass {
@@ -40,7 +57,8 @@ export class ZharpLoggerClass {
    * Calling `init()` a second time without first calling `destroy()` is a no-op
    * and will log a warning to the console.
    *
-   * @param config - SDK configuration. `apiKey` and `service` are required.
+   * @param config - SDK configuration. `apiKey` is required; `service` is too, unless the
+   *   ZHARP_SERVICE or OTEL_SERVICE_NAME environment variable supplies it in Node.
    *
    * @example
    * ZharpLogger.init({
@@ -56,11 +74,26 @@ export class ZharpLoggerClass {
       return;
     }
 
+    // Explicit config wins, then the environment variables a deployment already sets. No
+    // fallback invents a value: an unset environment is sent as no tag at all.
+    let service = config.service || nodeEnv('ZHARP_SERVICE') || nodeEnv('OTEL_SERVICE_NAME');
+    if (!service) {
+      // Warn rather than throw: a missing name should not be the reason an application fails
+      // to start, and the logs are still worth having under a placeholder.
+      console.warn(
+        "[Zharp] No service name — pass `service` to init() or set ZHARP_SERVICE. Using 'unknown-service'.",
+      );
+      service = 'unknown-service';
+    }
+
     this.config = {
       flushInterval: 5000,
       maxBatchSize: 50,
-      environment: 'production',
       ...config,
+      service,
+      environment: config.environment || nodeEnv('ZHARP_ENV') || nodeEnv('NODE_ENV'),
+      appVersion: config.appVersion || nodeEnv('ZHARP_VERSION'),
+      endpoint: normalizeEndpoint(config.endpoint),
       autoCapture: {
         errors: true,
         unhandledRejections: true,
@@ -70,18 +103,23 @@ export class ZharpLoggerClass {
     };
 
     this.queue = new LogQueue(500);
-    this.transport = new Transport(this.config.apiKey, this.config.service);
+    this.transport = new Transport(this.config.apiKey, this.config.endpoint);
 
     // Tracing. The tracer is always constructed so the span API works whether or not it is
     // switched on — instrumentation calls should not need to be wrapped in a check — but it
     // records nothing and starts no timer unless `tracing.enabled` is set.
     this.tracer = new Tracer({
       apiKey: this.config.apiKey,
+      endpoint: this.config.endpoint,
       serviceName: this.config.service,
+      // Undefined values vanish in JSON, so an unset tag is simply absent.
       resource: {
         'service.name': this.config.service,
+        // The current semantic-convention name, and the pre-1.27 one older readers expect.
+        'deployment.environment.name': this.config.environment,
         'deployment.environment': this.config.environment,
         'service.version': this.config.appVersion,
+        ...(this.config.source ? { 'zharp.source': this.config.source } : {}),
       },
       tracing: this.config.tracing,
       flushInterval: this.config.flushInterval,
@@ -113,7 +151,7 @@ export class ZharpLoggerClass {
     }
 
     /*
-     * A small shared handle, so the replay entry point can find the key and service without
+     * A small shared handle, so the replay entry point can find the key, service and endpoint without
      * importing this file — which would pull the whole logging SDK into a bundle that only
      * wanted the recorder.
      *
@@ -123,6 +161,7 @@ export class ZharpLoggerClass {
     const shared = ((globalThis as any).__ZHARP__ = (globalThis as any).__ZHARP__ ?? {});
     shared.apiKey = this.config.apiKey;
     shared.service = this.config.service;
+    shared.endpoint = this.config.endpoint;
 
     this.initialized = true;
   }
@@ -375,16 +414,27 @@ export class ZharpLoggerClass {
    * job, a message handler — this makes the work part of the trace that caused it rather than
    * a new one that nothing connects to.
    *
+   * Give it a `name` and the work runs inside a CONSUMER span of that name — the job then
+   * shows up the way a request does, with its own duration and errors, instead of only as the
+   * parent of whatever it happened to call. Without a name, the caller's context is simply made
+   * active.
+   *
    * @param traceparent - The `traceparent` header value from the caller
    * @param fn - The work to run inside that trace
+   * @param name - Optional span name for the work itself, e.g. `sendEmail`
    *
    * @example
    * worker.process((job) =>
-   *   ZharpLogger.continueTrace(job.data.headers?.traceparent, () => handle(job)));
+   *   ZharpLogger.continueTrace(job.data.headers?.traceparent, () => handle(job), 'sendEmail'));
    */
-  continueTrace<T>(traceparent: string | null | undefined, fn: () => T): T {
+  continueTrace<T>(traceparent: string | null | undefined, fn: () => T, name?: string): T {
     if (!this.tracer) return fn();
     const context: SpanContext | null = fromTraceparent(traceparent);
+    if (name) {
+      // `parent: null` when there is no usable header: the job starts its own trace rather than
+      // attaching to whatever happened to be active when it was picked up.
+      return this.tracer.startActiveSpan(name, { kind: 'CONSUMER', parent: context }, () => fn());
+    }
     return this.tracer.withSpanContext(context, fn);
   }
 
@@ -448,7 +498,10 @@ export class ZharpLoggerClass {
       window.removeEventListener('visibilitychange', this.handleVisibilityChange);
       window.removeEventListener('beforeunload', this.handleBeforeUnload);
     }
-    await this.flush();
+    // One flush sends one batch of `maxBatchSize`; teardown promises everything that was queued.
+    do {
+      await this.flush();
+    } while (this.queue && this.queue.size > 0);
     this.config = null;
     this.queue = null;
     this.transport = null;
@@ -460,10 +513,15 @@ export class ZharpLoggerClass {
   private push(
     level: LogLevel,
     service: string,
-    message: string,
+    rawMessage: unknown,
     metadata?: Record<string, any>,
   ): void {
     if (!this.queue || !this.config) return;
+
+    // Whatever the caller passed, the entry carries text: one non-string message used to get
+    // the whole batch rejected.
+    const message = toMessage(rawMessage);
+    const { environment, appVersion, source } = this.config;
 
     const context = getRuntimeContext(this.config.appVersion);
     // Stamp the log with the trace it happened inside. This is what turns "an error was logged"
@@ -475,13 +533,19 @@ export class ZharpLoggerClass {
       level,
       message,
       timestamp: new Date().toISOString(),
+      // The tags the log viewer filters by. Top-level, where the backend reads them; absent
+      // rather than empty when not configured.
+      ...(environment ? { environment } : {}),
+      ...(appVersion ? { version: appVersion } : {}),
+      ...(source ? { source } : {}),
       metadata: {
         // Developer-supplied metadata sits at the top level.
         // Runtime context goes under a dedicated key so it never
         // collides with app-specific fields.
         ...metadata,
         sessionId: getSessionId(),
-        environment: this.config.environment,
+        // Also kept here for backends older than the top-level tags.
+        ...(environment ? { environment } : {}),
         ...(span ? { traceId: span.traceId, spanId: span.spanId } : {}),
         context,
       },
@@ -516,14 +580,16 @@ export class ZharpLoggerClass {
     // Page went to background (tab switch, phone lock screen, etc.).
     // Use sendBeacon so the flush completes even if the tab is killed.
     if (document.visibilityState === 'hidden') {
-      const batch = this.queue?.drain(this.config?.maxBatchSize ?? 50) ?? [];
+      // Everything queued, not one batch: this may be the last chance to send any of it. The
+      // transport cuts it into beacon-sized pieces.
+      const batch = this.queue?.drain(this.queue.size) ?? [];
       this.transport?.sendBeacon(batch);
       this.tracer?.flushBeacon();
     }
   };
 
   private handleBeforeUnload = (): void => {
-    const batch = this.queue?.drain(this.config?.maxBatchSize ?? 50) ?? [];
+    const batch = this.queue?.drain(this.queue.size) ?? [];
     this.transport?.sendBeacon(batch);
     // Spans from the last page view would otherwise be lost — which is exactly the navigation
     // someone is looking at when they ask why the page was slow.

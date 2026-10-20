@@ -3,6 +3,7 @@ import { activeContext, withContext } from './context';
 import { newTraceId } from './ids';
 import { SpanContext, SpanOptions, SpanRecord, TracingOptions } from './types';
 import { TraceTransport } from './trace-transport';
+import { normalizeEndpoint } from '../delivery';
 
 /**
  * Starts spans, holds finished ones, and ships them in batches.
@@ -17,6 +18,7 @@ export class Tracer {
   private readonly resource: Record<string, any>;
   private readonly options: TracingOptions & { enabled: boolean; sampleRate: number };
   private readonly transport: TraceTransport;
+  private readonly endpoint: string;
 
   private finished: SpanRecord[] = [];
   private flushTimer: ReturnType<typeof setInterval> | null = null;
@@ -25,6 +27,7 @@ export class Tracer {
 
   constructor(config: {
     apiKey: string;
+    endpoint?: string;
     serviceName: string;
     resource?: Record<string, any>;
     tracing?: TracingOptions;
@@ -38,7 +41,8 @@ export class Tracer {
       sampleRate: 1,
       ...config.tracing,
     };
-    this.transport = new TraceTransport(config.apiKey, config.serviceName);
+    this.endpoint = normalizeEndpoint(config.endpoint);
+    this.transport = new TraceTransport(config.apiKey, this.endpoint);
     this.maxBatchSize = config.maxBatchSize ?? 100;
     // Spans outnumber logs by an order of magnitude, so the buffer is larger — but still
     // bounded, because an app that cannot reach the network must not grow until it dies.
@@ -168,7 +172,8 @@ export class Tracer {
   /** Best-effort send that survives page unload. */
   flushBeacon(): void {
     if (!this.finished.length) return;
-    const batch = this.finished.splice(0, this.maxBatchSize);
+    // All of it: there is no next flush after an unload. The transport cuts it to beacon size.
+    const batch = this.finished.splice(0, this.finished.length);
     this.transport.sendBeacon(batch);
   }
 
@@ -189,7 +194,7 @@ export class Tracer {
     if (!this.options.enabled) return false;
     // Never trace the calls this SDK makes to report telemetry: each one would produce a span,
     // which would be reported, which would produce a span.
-    if (url.indexOf('api.zharp.io') !== -1) return false;
+    if (url.indexOf('api.zharp.io') !== -1 || url.indexOf(this.endpoint) === 0) return false;
     return !matches(url, this.options.ignore);
   }
 

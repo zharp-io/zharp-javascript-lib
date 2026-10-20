@@ -1,4 +1,5 @@
 import { AutoCaptureOptions } from './types';
+import { formatArg, toMessage } from './message';
 
 export type ErrorHandler = (message: string, metadata?: Record<string, any>) => void;
 
@@ -26,7 +27,8 @@ export function setupAutoCapture(
       const prev = window.onerror ?? null;
 
       window.onerror = (message, source, lineno, colno, error) => {
-        onError(String(message), {
+        // `message` is an Event, not a string, when an <img> or <script> fails to load.
+        onError(toMessage(typeof message === 'string' ? message : error ?? message), {
           source,
           lineno,
           colno,
@@ -47,11 +49,9 @@ export function setupAutoCapture(
       const handler = (event: PromiseRejectionEvent) => {
         const reason = event.reason;
         const message =
-          reason instanceof Error
-            ? reason.message
-            : typeof reason === 'string'
-            ? reason
-            : 'Unhandled promise rejection';
+          reason === undefined || reason === null
+            ? 'Unhandled promise rejection'
+            : toMessage(reason);
 
         onError(message, {
           stack: reason instanceof Error ? reason.stack : undefined,
@@ -70,7 +70,7 @@ export function setupAutoCapture(
     // handlers (or the default crash behaviour) continue.
     if (options.errors !== false) {
       const handler = (error: Error) => {
-        onError(error.message, {
+        onError(toMessage(error), {
           stack: error.stack,
           name: error.name,
           type: 'uncaughtException',
@@ -87,11 +87,9 @@ export function setupAutoCapture(
     if (options.unhandledRejections !== false) {
       const handler = (reason: unknown) => {
         const message =
-          reason instanceof Error
-            ? reason.message
-            : typeof reason === 'string'
-            ? reason
-            : 'Unhandled promise rejection';
+          reason === undefined || reason === null
+            ? 'Unhandled promise rejection'
+            : toMessage(reason);
 
         onError(message, {
           stack: reason instanceof Error ? reason.stack : undefined,
@@ -112,7 +110,9 @@ export function setupAutoCapture(
     const prevConsoleError = console.error.bind(console);
 
     console.error = (...args: unknown[]) => {
-      onError(args.map(String).join(' '), { source: 'console.error' });
+      // `console.error()` with no arguments still becomes a log — with a placeholder message
+      // rather than an empty one the backend would refuse.
+      onError(toMessage(args.map(formatArg).join(' ')), { source: 'console.error' });
       prevConsoleError(...args);
     };
 

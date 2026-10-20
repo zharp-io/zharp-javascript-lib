@@ -1,6 +1,6 @@
 {
   "name": "@zharp/logs",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Logging and distributed tracing SDK for JavaScript and TypeScript — browser, Node.js, and React Native",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -24,6 +24,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "test": "pnpm run build && node test/run.mjs",
     "prepublishOnly": "pnpm run build && pnpm run typecheck"
   },
   "keywords": [

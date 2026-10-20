@@ -1,5 +1,6 @@
 import { Tracer } from './tracer';
 import { fromTraceparent, toTraceparent } from './context';
+import { loadBuiltin, syncBuiltinExports } from './builtins';
 
 /**
  * Traces Node's `http` and `https` modules — both sides of a call.
@@ -32,26 +33,29 @@ export function instrumentNodeHttp(tracer: Tracer): Teardown {
   const undoServer = patchServer(tracer, modules);
   if (undoServer) teardowns.push(undoServer);
 
-  return () => teardowns.forEach((undo) => undo());
+  // ES-module code that wrote `import { request } from 'node:http'` holds its own copy of the
+  // export; this makes it see the patched one, and later the restored one.
+  syncBuiltinExports();
+
+  return () => {
+    teardowns.forEach((undo) => undo());
+    syncBuiltinExports();
+  };
 }
 
 /**
  * Load `http` and `https`, or nothing at all in a browser.
  *
- * The require is indirect so a bundler building for the browser does not try to resolve a Node
- * built-in and either fail or pull in a shim.
+ * Through `loadBuiltin`, which works from both builds — the ESM one has no `require`, and used
+ * to come back empty here, so native-ESM servers produced no spans at all.
  */
 function loadHttpModules(): Array<{ name: string; module: any }> | null {
-  try {
-    const req = typeof require === 'function' ? require : null;
-    if (!req) return null;
-    return [
-      { name: 'http', module: req('http') },
-      { name: 'https', module: req('https') },
-    ];
-  } catch {
-    return null;
-  }
+  const http = loadBuiltin('http');
+  if (!http) return null;
+  return [
+    { name: 'http', module: http },
+    { name: 'https', module: loadBuiltin('https') },
+  ];
 }
 
 // ── outgoing ────────────────────────────────────────────────────────────────
