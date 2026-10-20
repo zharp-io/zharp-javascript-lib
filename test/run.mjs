@@ -496,6 +496,56 @@ console.log('\nExit without destroy (exit-without-destroy.cjs)');
   });
 }
 
+// ── a crashing Node app still crashes ────────────────────────────────────────
+
+/** Run a fixture and report how it ended, whatever the exit code. */
+function runRaw(file, args = [], nodeArgs = []) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [...nodeArgs, join(here, 'fixtures', file), ...args], {
+      cwd: root,
+      env: { ...cleanEnv(), ZHARP_TEST_ENDPOINT: endpoint },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('exit', (code) => resolve({ code, stdout: out, stderr: err }));
+  });
+}
+
+console.log('\nCrashes (crash.cjs)');
+{
+  const thrown = await runRaw('crash.cjs', ['throw']);
+  const rejected = await runRaw('crash.cjs', ['reject']);
+  const warnOnly = await runRaw('crash.cjs', ['reject'], ['--unhandled-rejections=warn']);
+  const own = await runRaw('crash.cjs', ['own-handler']);
+  const sent = (mode) => entriesOf(logRequests(`test-key-crash-${mode}`));
+
+  check('an uncaught exception still ends the process with code 1, printing the error', () => {
+    assert.equal(thrown.code, 1, thrown.stdout + thrown.stderr);
+    assert.match(thrown.stderr, /Error: boom \(throw\)/);
+    assert.doesNotMatch(thrown.stdout, /survived/);
+  });
+  check('…after the error and what was queued before it reached Zharp', () => {
+    const messages = sent('throw').map((e) => e.message);
+    assert.ok(messages.includes('before the crash'), JSON.stringify(messages));
+    assert.ok(sent('throw').some((e) => e.level === 'error' && e.metadata?.type === 'uncaughtException'));
+  });
+  check("an unhandled rejection ends the process with code 1 too (Node's default mode)", () => {
+    assert.equal(rejected.code, 1, rejected.stdout + rejected.stderr);
+    assert.ok(sent('reject').some((e) => e.metadata?.type === 'unhandledRejection'));
+  });
+  check('with --unhandled-rejections=warn the process keeps running, as Node would', () => {
+    assert.match(warnOnly.stdout, /survived/);
+  });
+  check('an app with its own uncaughtException handler stays in charge', () => {
+    assert.equal(own.code, 0, own.stdout + own.stderr);
+    assert.match(own.stdout, /survived/);
+    assert.ok(sent('own-handler').some((e) => e.metadata?.type === 'uncaughtException'));
+  });
+}
+
 // ── browser unload path ──────────────────────────────────────────────────────
 
 console.log('\nBrowser unload (browser-beacon.mjs)');

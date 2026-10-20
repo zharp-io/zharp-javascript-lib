@@ -119,7 +119,7 @@ ZharpLogger.error('Payment failed', { orderId: 99, reason: 'insufficient_funds' 
 | `ZHARP_VERSION` | `appVersion` | |
 | `ZHARP_SOURCE` | `source` | |
 | `ZHARP_ENDPOINT` | `endpoint` | Default `https://api.zharp.io/api/v1` |
-| `ZHARP_DISABLED` | — | `true` or `1`: start nothing |
+| `ZHARP_DISABLED` | — | `true`, `1`, `yes` or `on`: start nothing |
 
 A browser reads none of them — bundles often carry a `process.env` baked in at build time, which
 would tag a page with the build machine's settings.
@@ -182,8 +182,11 @@ Auto-capture is on as soon as `init()` succeeds. It hooks into global error hand
 | Unhandled promise rejections | `unhandledrejection` | `process.unhandledRejection` |
 | `console.error` calls | opt-in | opt-in |
 
-Existing handlers keep working: a previous `window.onerror` is still called, and Node's own
-handlers still run.
+Existing handlers keep working: a previous `window.onerror` is still called. In Node, a crash
+is still a crash: when the app has no `uncaughtException` handler of its own, the SDK sends the
+error and anything queued (waiting up to 2 seconds), prints it as Node would and exits with code 1.
+An unhandled rejection does the same unless `--unhandled-rejections` is set to `warn` or `none`.
+An app that registers its own handler decides what happens next.
 
 To change what is captured:
 
@@ -482,7 +485,7 @@ app.use(
   morgan('combined', {
     stream: {
       write: (message: string) => {
-        ZharpLogger.info(message.trim(), { source: 'http' });
+        ZharpLogger.info(message.trim());
       },
     },
   })

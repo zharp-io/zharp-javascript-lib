@@ -122,7 +122,7 @@ ZharpAPM.init({
   sampleRate: 1,                     // Fraction of traces to record. Default: 1
   fetch: true,                       // Trace fetch and XHR. Default: true
   http: true,                        // Trace Node http/https, in and out. Default: true
-  breadcrumbs: true,                 // Trail of clicks/requests before an error. Default: true
+  breadcrumbs: true,                 // Trail of clicks, navigations and fetch calls before an error. Default: true
   propagateTo: [/api\.myapp\.com/],  // Which hosts get the traceparent header
   ignore: ['/health'],               // Paths never traced
 

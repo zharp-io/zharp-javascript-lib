@@ -25,6 +25,8 @@ export class ZharpLoggerClass {
   private queue: LogQueue | null = null;
   private transport: Transport | null = null;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
+  /** Sends under way, so a crashing process can wait for them before it exits. */
+  private sending = new Set<Promise<void>>();
   private teardownAutoCapture: (() => void) | null = null;
   /** What this instance put on the shared handle, so teardown removes its own entry and no other. */
   private published: PublishedConfig | null = null;
@@ -120,6 +122,7 @@ export class ZharpLoggerClass {
     this.teardownAutoCapture = setupAutoCapture(
       (message, metadata) => this.push('error', this.config!.service, message, metadata),
       this.config.autoCapture,
+      () => this.flushAll(),
     );
 
     // Flush on a regular interval (default every 5 seconds). In Node the timer must not keep the
@@ -314,7 +317,22 @@ export class ZharpLoggerClass {
     const batch = this.queue.drain(this.config.maxBatchSize);
     if (batch.length === 0) return;
 
-    await this.transport.send(batch);
+    const sent = this.transport.send(batch);
+    this.sending.add(sent);
+    try {
+      await sent;
+    } finally {
+      this.sending.delete(sent);
+    }
+  }
+
+  /**
+   * Send every queued log, batch by batch, and wait for sends already under way — an error log
+   * starts one of its own — which is what a crashing process gets before it exits.
+   */
+  private async flushAll(): Promise<void> {
+    while (this.queue && this.queue.size > 0) await this.flush();
+    await Promise.allSettled([...this.sending]);
   }
 
   /**

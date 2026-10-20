@@ -16,7 +16,7 @@ npm install @zharp/apm             # tracing and session replay
 In Node, both start from the environment with no code changes:
 
 ```bash
-ZHARP_API_KEY=your-api-key ZHARP_SERVICE=checkout-api \
+ZHARP_API_KEY=your-api-key ZHARP_SERVICE=checkout-api ZHARP_ENV=production \
   node --require @zharp/logs/init --require @zharp/apm/init app.js
 ```
 

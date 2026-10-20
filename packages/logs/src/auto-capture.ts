@@ -3,6 +3,9 @@ import { formatArg, toMessage } from '@zharp/internal/message';
 
 export type ErrorHandler = (message: string, metadata?: Record<string, any>) => void;
 
+/** How long a crashing process waits for its last logs to be sent before it exits. */
+const FATAL_FLUSH_MS = 2000;
+
 const isBrowser = typeof window !== 'undefined';
 const isNode = !isBrowser && typeof process !== 'undefined';
 
@@ -16,6 +19,7 @@ const isNode = !isBrowser && typeof process !== 'undefined';
 export function setupAutoCapture(
   onError: ErrorHandler,
   options: AutoCaptureOptions = {},
+  flush: () => Promise<void> = async () => {},
 ): () => void {
   const teardowns: Array<() => void> = [];
 
@@ -65,9 +69,12 @@ export function setupAutoCapture(
   } else if (isNode) {
     // ── process.uncaughtException ───────────────────────────────────────────
     // Node.js equivalent of window.onerror. Fires when a synchronous exception
-    // is thrown and not caught anywhere in the call stack. Without a handler,
-    // Node.js would crash the process. We log it and let other registered
-    // handlers (or the default crash behaviour) continue.
+    // is thrown and not caught anywhere in the call stack.
+    //
+    // Listening for it stops Node crashing, so a process whose only listener is this one would
+    // carry on in whatever broken state the error left it. When nobody else handles it, we do
+    // what Node would have: send the log, print the error and exit with code 1. When the app has
+    // its own handler, deciding what happens next is left to it.
     if (options.errors !== false) {
       const handler = (error: Error) => {
         onError(toMessage(error), {
@@ -75,6 +82,7 @@ export function setupAutoCapture(
           name: error.name,
           type: 'uncaughtException',
         });
+        if (process.listenerCount('uncaughtException') === 1) void exitAfterFlush(error, flush);
       };
 
       process.on('uncaughtException', handler);
@@ -96,6 +104,9 @@ export function setupAutoCapture(
           name: reason instanceof Error ? reason.name : undefined,
           type: 'unhandledRejection',
         });
+        // Since Node 15 an unhandled rejection crashes the process unless --unhandled-rejections
+        // says otherwise; a listener cancels that, so the same rule as above applies.
+        if (process.listenerCount('unhandledRejection') === 1 && rejectionsCrash()) void exitAfterFlush(reason, flush);
       };
 
       process.on('unhandledRejection', handler);
@@ -120,4 +131,25 @@ export function setupAutoCapture(
   }
 
   return () => teardowns.forEach((fn) => fn());
+}
+
+let exiting = false;
+
+/** Send what is queued (for at most FATAL_FLUSH_MS), print the error as Node does, exit with 1. */
+async function exitAfterFlush(error: unknown, flush: () => Promise<void>): Promise<void> {
+  if (exiting) return;
+  exiting = true;
+  await Promise.race([
+    flush().catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, FATAL_FLUSH_MS)),
+  ]);
+  process.stderr.write(`${error instanceof Error ? error.stack ?? String(error) : String(error)}\n`);
+  process.exit(1);
+}
+
+/** Whether Node's --unhandled-rejections mode makes an unhandled rejection fatal (the default). */
+function rejectionsCrash(): boolean {
+  const flags = `${process.execArgv.join(' ')} ${process.env.NODE_OPTIONS ?? ''}`;
+  const mode = /--unhandled-rejections[= ](\w+)/.exec(flags)?.[1];
+  return !mode || mode === 'throw' || mode === 'strict';
 }

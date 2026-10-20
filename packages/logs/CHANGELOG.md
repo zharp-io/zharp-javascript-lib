@@ -51,6 +51,10 @@ appVersion, autoCapture, flushInterval, maxBatchSize })` and every logging metho
 
 ### Fixed
 
+- **A crashing Node app still crashes.** Listening for `uncaughtException` and
+  `unhandledRejection` stopped Node exiting, so an app kept running in whatever state the error left
+  it. When the app has no handler of its own, the SDK now sends the error and what is queued (up to
+  2 seconds), prints it and exits with code 1, as Node would have.
 - **A Node script that never calls `destroy()` now exits.** The flush timer kept the process alive;
   it no longer does, and what is still queued is sent on `beforeExit`.
 - Messages are always non-empty strings, on every path (logging methods, `log()`, auto-capture,
