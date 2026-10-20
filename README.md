@@ -16,6 +16,14 @@ yarn add @zharp/logs
 
 ---
 
+## API key
+
+Create an **Ingest only** key in Zharp for this SDK. Browser code ships the key to every visitor, and
+a server's environment variables leak more often than anyone plans for — a key that can only send
+data, never read it, is the one to hand out.
+
+---
+
 ## Quick start
 
 ### Browser / React / Vue / Next.js
@@ -45,9 +53,8 @@ import { ZharpLogger } from '@zharp/logs';
 // In main.ts or app bootstrap
 ZharpLogger.init({
   apiKey: process.env.ZHARP_API_KEY,
-  service: 'user-service',
-  environment: process.env.NODE_ENV,
-  appVersion: process.env.APP_VERSION,
+  service: 'user-service',        // or set ZHARP_SERVICE
+  // environment and appVersion fall back to ZHARP_ENV / NODE_ENV and ZHARP_VERSION
 });
 
 // In any service or controller
@@ -62,14 +69,16 @@ ZharpLogger.error('Database query failed', { table: 'orders', error: err.message
 ```typescript
 ZharpLogger.init({
   // Required
-  apiKey: 'your-api-key',       // Your Zharp API key
-  service: 'my-service',        // Service name shown in the log viewer
+  apiKey: 'your-api-key',       // An "Ingest only" Zharp API key
+  service: 'my-service',        // Service name shown in the log viewer (Node: see fallbacks below)
 
   // Optional
-  environment: 'production',    // Tag attached to every log. Default: 'production'
-  appVersion: '1.4.2',         // Shown under context.appVersion in each log
+  environment: 'production',    // `environment` tag on every log and span. No default
+  appVersion: '1.4.2',          // `version` tag on every log, service.version on spans
+  source: 'web',                // `source` tag on every log, zharp.source on spans
+  endpoint: 'https://api.zharp.io/api/v1', // Zharp API base URL. Default shown
   flushInterval: 5000,          // How often to flush the queue (ms). Default: 5000
-  maxBatchSize: 50,             // Max logs per batch. Default: 50
+  maxBatchSize: 50,             // Max logs taken from the queue per flush. Default: 50
 
   // Auto-capture (all enabled by default except consoleErrors)
   autoCapture: {
@@ -91,6 +100,25 @@ ZharpLogger.init({
 });
 ```
 
+### Tags and environment-variable fallbacks
+
+`environment`, `version` (from `appVersion`) and `source` are sent as top-level tags on every log —
+the fields the log viewer filters by — and as `deployment.environment.name` (plus the older
+`deployment.environment`), `service.version` and `zharp.source` on every span. A tag that is not
+configured is not sent; nothing defaults to `'production'`.
+
+In Node, anything not passed to `init()` is read from the environment:
+
+| Option | Falls back to |
+|---|---|
+| `service` | `ZHARP_SERVICE`, then `OTEL_SERVICE_NAME` |
+| `environment` | `ZHARP_ENV`, then `NODE_ENV` |
+| `appVersion` | `ZHARP_VERSION` |
+
+In the browser there are no fallbacks: set `service` and `environment` explicitly. If no service name
+is found at all, the SDK logs a warning and files everything under `unknown-service` rather than
+throwing.
+
 ---
 
 ## Tracing
@@ -107,8 +135,14 @@ build on `http.Server`, so no framework-specific setup is needed — and every o
 `http`/`https`/`fetch` call becomes a client span beneath it. Work inside a request stays
 attached to that request across `await` boundaries, so concurrent requests never mix.
 
-Logs emitted inside a trace carry its `traceId`, so an error in the log viewer links back to the
-request that produced it.
+Logs emitted inside a trace carry its `traceId` and `spanId` in their metadata, so you can search
+the logs for the trace you are looking at.
+
+**Native ES modules in Node** (`"type": "module"`, `.mjs`) need **Node 20.16+ or 22.3+** for HTTP
+tracing and for keeping the active span across `await`: the ESM build loads `node:http` and
+`node:async_hooks` through `process.getBuiltinModule`, because an ES module has no `require`. On older
+Node the ESM build still logs and records manual spans, but does not patch `http`. The CommonJS
+build works on any supported Node.
 
 ### Timing your own code
 
@@ -130,10 +164,15 @@ Queues, WebSocket messages and workers break the chain. Carry the trace across b
 // Producer
 await queue.add('sendEmail', { orderId, trace: ZharpLogger.traceHeaders() });
 
-// Consumer
+// Consumer — the third argument names the work
 worker.process((job) =>
-  ZharpLogger.continueTrace(job.data.trace?.traceparent, () => sendEmail(job.data)));
+  ZharpLogger.continueTrace(job.data.trace?.traceparent, () => sendEmail(job.data), 'sendEmail'));
 ```
+
+With a name, `continueTrace` runs the function inside a `CONSUMER` span of that name, so each job
+gets its own duration and error status the way an HTTP request does. Without a name it only makes
+the caller's trace active, and creates no span of its own. A missing or malformed `traceparent`
+starts a new trace.
 
 ### Showing a trace ID to a user
 
@@ -212,10 +251,10 @@ ZharpLogger.init({ apiKey: 'YOUR_KEY', service: 'checkout-web', tracing: { enabl
 ZharpReplay.start({ sampleRate: 0.1 });
 ```
 
-Recordings, traces and logs from the same page load share a session id, so a replay links to the
-requests it made and a failing trace links back to the recording of the session that caused it.
-A session where the SDK records an error is flagged, which is how you find the ones worth
-watching — nobody watches a recording of a session that went fine.
+Recordings and logs from the same page load share a session id, and a recording lists the traces
+started during it, so from a replay you can open the requests it made. A session where the SDK
+records an error is flagged, which is how you find the ones worth watching — nobody watches a
+recording of a session that went fine.
 
 ### Privacy
 
@@ -243,8 +282,12 @@ serialised.
 `sampleRate` is decided once, when recording starts. A session recorded for half its length is a
 video that cuts out mid-sentence, so the decision is never revisited.
 
-Recordings are the largest thing this SDK sends. Frames are batched and shipped every 10 seconds,
-compressed to roughly a quarter of their size at rest, and kept for at most 7 days.
+Recordings are the largest thing this SDK sends. Frames are batched and shipped every 10 seconds
+(or every 500 events), stored compressed, and kept for at most 7 days.
+
+Each batch is numbered when it is cut. A batch that fails with a network error or a 5xx is retried,
+unchanged and under the same number, on the next flush — up to 3 attempts — and then dropped; a 4xx
+drops it at once. Only one flush runs at a time.
 
 ### Controlling it by hand
 
@@ -287,6 +330,9 @@ Every log entry sent to Zharp includes:
   "level": "error",
   "message": "Payment failed",
   "timestamp": "2026-06-14T09:14:32.041Z",
+  "environment": "production",
+  "version": "1.4.2",
+  "source": "web",
   "metadata": {
     "orderId": 99,
     "sessionId": "a3f8c2d1-...",
@@ -314,7 +360,11 @@ In Node.js, `context` contains server info instead:
 }
 ```
 
-Your custom metadata fields (`orderId: 99`) sit at the top level alongside `sessionId` and `environment`. The auto-captured browser/Node context lives under a separate `context` key so it never collides with your own fields.
+`environment`, `version` and `source` appear only when configured (or, in Node, found in the environment). `environment` is also repeated in `metadata` for older Zharp backends.
+
+Your custom metadata fields (`orderId: 99`) sit at the top level of `metadata` alongside `sessionId` and `environment`. The auto-captured browser/Node context lives under a separate `context` key so it never collides with your own fields. Inside a trace, `traceId` and `spanId` are added too.
+
+`message` is always a non-empty string: objects are sent as JSON, an `Error` as its message, anything else through `String()`, and an empty message as `(empty message)`.
 
 ---
 
@@ -414,7 +464,7 @@ import { ZharpLogger } from '@zharp/logs';
 export class ZharpTransport extends Transport {
   log(info: any, callback: () => void) {
     const { level, message, ...meta } = info;
-    ZharpLogger.log(level, message, Object.keys(meta).length ? meta : undefined);
+    ZharpLogger.log(level, String(message), Object.keys(meta).length ? meta : undefined);
 
     // Required — tells Winston this transport has finished processing the log.
     // Without this, Winston can't track delivery and may stall under high volume.
@@ -458,7 +508,9 @@ const zharpStream = new Writable({
   write(chunk, _encoding, callback) {
     try {
       const { level, msg, ...meta } = JSON.parse(chunk.toString());
-      ZharpLogger.log(PINO_LEVELS[level] ?? 'info', msg, meta);
+      // `pino.info({ orderId })` writes a line with no `msg` at all.
+      const message = msg ?? (meta.err?.message || JSON.stringify(meta));
+      ZharpLogger.log(PINO_LEVELS[level] ?? 'info', String(message), meta);
     } catch {}
     callback();
   },
@@ -477,24 +529,26 @@ const logger = pino(
 NestJS exposes a `LoggerService` interface. Implement it to route all NestJS framework logs (bootstrap messages, request logs, errors) through Zharp:
 
 ```typescript
+// zharp-nest-logger.ts
 import { LoggerService } from '@nestjs/common';
 import { ZharpLogger } from '@zharp/logs';
 
-export class ZharpLogger implements LoggerService {
-  log(message: string, context?: string) {
-    ZharpLogger.info(message, { context });
+// Named ZharpNestLogger so it does not shadow the ZharpLogger it forwards to.
+export class ZharpNestLogger implements LoggerService {
+  log(message: any, context?: string) {
+    ZharpLogger.info(String(message), { context });
   }
-  error(message: string, trace?: string, context?: string) {
-    ZharpLogger.error(message, { trace, context });
+  error(message: any, trace?: string, context?: string) {
+    ZharpLogger.error(String(message), { trace, context });
   }
-  warn(message: string, context?: string) {
-    ZharpLogger.warn(message, { context });
+  warn(message: any, context?: string) {
+    ZharpLogger.warn(String(message), { context });
   }
-  debug(message: string, context?: string) {
-    ZharpLogger.debug(message, { context });
+  debug(message: any, context?: string) {
+    ZharpLogger.debug(String(message), { context });
   }
-  verbose(message: string, context?: string) {
-    ZharpLogger.debug(message, { context });
+  verbose(message: any, context?: string) {
+    ZharpLogger.debug(String(message), { context });
   }
 }
 ```
@@ -557,11 +611,13 @@ import { ZharpLogger, ZharpConfig, LogLevel, LogEntry } from '@zharp/logs';
 
 ## How it works
 
-**Batching** — Calling `ZharpLogger.info(...)` never makes an immediate network request. Logs go into an in-memory queue and are flushed to Zharp in a single batch every 5 seconds. This means logging never blocks your app and the number of requests stays minimal no matter how many logs you produce.
+**Batching** — Calling `ZharpLogger.info(...)` never makes an immediate network request (except `error` and `fatal`, which flush straight away). Logs go into an in-memory queue of up to 500 entries and are flushed every 5 seconds, up to `maxBatchSize` at a time. Each request is capped at about 1 MB; a larger batch is split across several requests.
 
-**Retry** — If a batch fails (network error or 5xx response) the SDK retries up to 3 times with exponential backoff: 1s → 2s → 4s. It does not retry 4xx errors since those indicate a problem with the request itself that won't be fixed by retrying.
+**Authentication** — Requests send the key in an `X-API-KEY` header to `/agent/logs`, `/agent/traces` or `/agent/replay`. The only exception is `sendBeacon`, which cannot set headers and so puts the key in the path (`/agent/logs/<key>`).
 
-**Guaranteed delivery on page close** — When a browser tab closes, in-flight `fetch` requests get cancelled. The SDK uses `navigator.sendBeacon` instead — a browser API specifically built for this that guarantees the request completes even as the page shuts down.
+**Retry** — A log request that fails with a network error or a 5xx is tried 3 times in all: once, then again after 2 s, then after 4 s. Spans get 2 attempts, 1 s apart. 4xx responses are not retried, since those indicate a problem with the request itself that won't be fixed by retrying.
+
+**Delivery on page close** — When a browser tab closes, in-flight `fetch` requests can be cancelled. On `visibilitychange` (hidden) and `beforeunload` the SDK sends everything still queued with `navigator.sendBeacon`, in chunks under 60 KB (browsers cap beacons at 64 KB). If the browser refuses a beacon, that chunk is sent with a `keepalive` fetch, and failing that with an ordinary request — best effort, but nothing still sendable is dropped.
 
 **Automatic context** — The SDK captures environment details once at startup and attaches them to every log under a `context` field so you never have to pass them manually:
 
@@ -570,7 +626,9 @@ import { ZharpLogger, ZharpConfig, LogLevel, LogEntry } from '@zharp/logs';
 
 **Session tracking** — A `sessionId` is generated once per page load and attached to every log, letting you trace all events from a single user session across your entire stack.
 
-**Scope** — At 6.8 KB minified, this package is intentionally limited to log ingestion. For full programmatic control of Zharp (creating monitors, managing alerts, querying incidents) a separate `@zharp/sdk` package will be available.
+**Size** — The main entry is about 28 KB minified (about 9 KB gzipped) in the 1.4.0 ESM build. Session replay is a separate entry point (`@zharp/logs/replay`, about 6 KB minified plus `rrweb`), so it is only bundled if you import it.
+
+**Scope** — This package sends logs, traces and recordings. It does not manage monitors, alerts or incidents.
 
 ---
 
