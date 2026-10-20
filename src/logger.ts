@@ -140,8 +140,14 @@ export class ZharpLoggerClass {
       this.config.autoCapture,
     );
 
-    // Flush on a regular interval (default every 5 seconds)
+    // Flush on a regular interval (default every 5 seconds). In Node the timer must not keep the
+    // process alive — a script that never calls destroy() would never exit — so what is still
+    // queued when the work runs out is sent on `beforeExit` instead.
     this.flushTimer = setInterval(() => this.flush(), this.config.flushInterval);
+    (this.flushTimer as any)?.unref?.();
+    if (typeof window === 'undefined' && typeof process !== 'undefined' && typeof process.on === 'function') {
+      process.on('beforeExit', this.handleBeforeExit);
+    }
 
     // Flush when the tab is hidden or the page is about to close.
     // Uses sendBeacon so the request is guaranteed to complete even on unload.
@@ -498,6 +504,9 @@ export class ZharpLoggerClass {
       window.removeEventListener('visibilitychange', this.handleVisibilityChange);
       window.removeEventListener('beforeunload', this.handleBeforeUnload);
     }
+    if (typeof process !== 'undefined' && typeof process.off === 'function') {
+      process.off('beforeExit', this.handleBeforeExit);
+    }
     // One flush sends one batch of `maxBatchSize`; teardown promises everything that was queued.
     do {
       await this.flush();
@@ -586,6 +595,15 @@ export class ZharpLoggerClass {
       this.transport?.sendBeacon(batch);
       this.tracer?.flushBeacon();
     }
+  };
+
+  /**
+   * Node is about to exit with logs still queued. Sending them puts work back on the event loop,
+   * so `beforeExit` fires again once they're out — and with the queue empty this does nothing,
+   * which lets the process end.
+   */
+  private handleBeforeExit = (): void => {
+    if (this.queue && this.queue.size > 0) void this.flush();
   };
 
   private handleBeforeUnload = (): void => {

@@ -225,6 +225,26 @@ console.log('\nDefaults from environment variables (env-defaults.cjs)');
   });
 }
 
+// ── a Node script that never calls destroy() ─────────────────────────────────
+
+console.log('\nExit without destroy (exit-without-destroy.cjs)');
+{
+  const started = Date.now();
+  const exited = await Promise.race([
+    run('exit-without-destroy.cjs').then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 15_000)),
+  ]);
+  const entries = entriesOf(logRequests('test-key-exit'));
+
+  check('the process exits on its own, well before the 60 s flush interval', () => {
+    assert.equal(exited, true, 'still running after 15 s');
+    assert.ok(Date.now() - started < 15_000);
+  });
+  check('what was queued at exit was sent', () => {
+    assert.deepEqual(entries.map((e) => e.message).sort(), ['exit-check 0', 'exit-check 1', 'exit-check 2']);
+  });
+}
+
 // ── browser unload path ──────────────────────────────────────────────────────
 
 console.log('\nBrowser unload (browser-beacon.mjs)');

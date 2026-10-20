@@ -34,6 +34,8 @@ replay** (`@zharp/logs/replay`), in addition to the changes below.
 
 ### Fixed
 
+- **A Node script that never calls `destroy()` now exits.** The log flush timer kept the process
+  alive; it no longer does, and what is still queued is sent on `beforeExit`.
 - **Native ESM in Node** (Node 20.16+ / 22.3+): the ESM build could not `require`, so HTTP tracing was
   silently off and the active span was a single variable shared by every concurrent request. Built-ins
   are now loaded with `process.getBuiltinModule`, falling back to `require` in the CJS build.
