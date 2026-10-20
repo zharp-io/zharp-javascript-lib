@@ -58,7 +58,7 @@
     "url": "https://github.com/zharp/zharp-js-sdk",
     "directory": "packages/apm"
   },
-  "homepage": "https://zharp.io/docs/sdks/js",
+  "homepage": "https://zharp.io/docs/sdks/apm",
   "bugs": "https://github.com/zharp/zharp-js-sdk/issues",
   "dependencies": {
     "rrweb": "^2.1.1"

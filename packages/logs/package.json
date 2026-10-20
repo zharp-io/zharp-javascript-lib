@@ -57,7 +57,7 @@
     "url": "https://github.com/zharp/zharp-js-sdk",
     "directory": "packages/logs"
   },
-  "homepage": "https://zharp.io/docs/sdks/js",
+  "homepage": "https://zharp.io/docs/sdks/logs",
   "bugs": "https://github.com/zharp/zharp-js-sdk/issues",
   "devDependencies": {
     "@types/node": "^25.9.3",
