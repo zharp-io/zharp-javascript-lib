@@ -1,0 +1,73 @@
+{
+  "name": "@zharp/apm",
+  "version": "1.0.0",
+  "description": "Distributed tracing and session replay for JavaScript and TypeScript — browser and Node.js",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./init": {
+      "types": "./init.d.ts",
+      "import": "./init.mjs",
+      "require": "./init.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "./init.js",
+    "./init.mjs"
+  ],
+  "files": [
+    "dist",
+    "init.js",
+    "init.mjs",
+    "init.d.ts"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build && pnpm run typecheck"
+  },
+  "keywords": [
+    "zharp",
+    "apm",
+    "tracing",
+    "distributed-tracing",
+    "opentelemetry",
+    "traceparent",
+    "breadcrumbs",
+    "monitoring",
+    "observability",
+    "session-replay",
+    "rrweb"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zharp/zharp-js-sdk",
+    "directory": "packages/apm"
+  },
+  "homepage": "https://zharp.io/docs/sdks/js",
+  "bugs": "https://github.com/zharp/zharp-js-sdk/issues",
+  "dependencies": {
+    "rrweb": "^2.1.1"
+  },
+  "devDependencies": {
+    "@rrweb/types": "^2.1.1",
+    "@types/node": "^25.9.3",
+    "@zharp/internal": "workspace:*",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  }
+}

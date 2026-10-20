@@ -1,0 +1,16 @@
+{
+  "name": "@zharp/internal",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Internals shared by @zharp/logs and @zharp/apm. Never published: tsup bundles it into each package.",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^5.0.0"
+  }
+}

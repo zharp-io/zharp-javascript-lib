@@ -1,6 +1,6 @@
 /**
- * The Node scenario, shared by the ESM and CJS consumers so both builds are held to the same
- * checks. Everything observable over the wire is asserted by test/run.mjs; what can only be
+ * The Node scenario, shared by the ESM and CJS consumers so both builds of both packages are
+ * held to the same checks. Everything observable over the wire is asserted by test/run.mjs; what can only be
  * seen from inside the process (the active trace before and after an await) is returned.
  */
 
@@ -18,7 +18,7 @@ function get(http, port, path) {
   });
 }
 
-export async function scenario({ ZharpLogger, http, label, namedGet }) {
+export async function scenario({ ZharpLogger, ZharpAPM, http, label, namedGet }) {
   ZharpLogger.init({
     apiKey: 'test-key-123',
     service: `${label}-app`,
@@ -29,15 +29,16 @@ export async function scenario({ ZharpLogger, http, label, namedGet }) {
     flushInterval: 60_000,
     maxBatchSize: 500,
     autoCapture: { errors: false, unhandledRejections: false },
-    tracing: { enabled: true, breadcrumbs: false },
   });
+  // No key, service or tags: APM takes them from the logger started above.
+  ZharpAPM.init({ breadcrumbs: false, flushInterval: 60_000 });
 
   // ── a server whose handler awaits, to see whether the request's context survives ──
   const server = http.createServer(async (req, res) => {
-    const before = ZharpLogger.currentTraceId();
+    const before = ZharpAPM.currentTraceId();
     await sleep(25);
     await Promise.resolve();
-    const after = ZharpLogger.currentTraceId();
+    const after = ZharpAPM.currentTraceId();
     ZharpLogger.info(`inside request ${req.url}`);
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ before, after }));
@@ -73,9 +74,9 @@ export async function scenario({ ZharpLogger, http, label, namedGet }) {
 
   // ── continueTrace ──
   const tp = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;
-  const inner = ZharpLogger.continueTrace(tp, () => ZharpLogger.currentTraceId(), 'process-job');
-  const plain = ZharpLogger.continueTrace(`00-${'c'.repeat(32)}-${'d'.repeat(16)}-01`, () => ZharpLogger.currentTraceId());
-  await ZharpLogger.continueTrace(
+  const inner = ZharpAPM.continueTrace(tp, () => ZharpAPM.currentTraceId(), 'process-job');
+  const plain = ZharpAPM.continueTrace(`00-${'c'.repeat(32)}-${'d'.repeat(16)}-01`, () => ZharpAPM.currentTraceId());
+  await ZharpAPM.continueTrace(
     `00-${'e'.repeat(32)}-${'f'.repeat(16)}-01`,
     async () => {
       await sleep(10);
@@ -85,6 +86,7 @@ export async function scenario({ ZharpLogger, http, label, namedGet }) {
   );
 
   server.close();
+  await ZharpAPM.destroy();
   await ZharpLogger.destroy();
 
   return { a, b, named, inner, plain };

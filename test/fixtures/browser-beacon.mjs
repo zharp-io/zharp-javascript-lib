@@ -22,7 +22,7 @@ globalThis.window = win;
 globalThis.document = { visibilityState: 'hidden' };
 
 // Imported after the globals exist: the SDK decides "browser or Node" when it loads.
-const { ZharpLogger } = await import('../../dist/index.mjs');
+const { ZharpLogger } = await import('@zharp/logs');
 
 ZharpLogger.init({
   apiKey: 'test-key-beacon',

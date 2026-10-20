@@ -1,21 +1,27 @@
 /**
- * End-to-end checks against the built package (run `pnpm run build` first).
+ * End-to-end checks against the built packages (run `pnpm -r build` first; `pnpm test` does).
  *
  * A local HTTP server stands in for the Zharp backend and records every request. Each scenario
- * runs in its own Node process, as a real consumer would: the ESM build imported from a native
- * .mjs file, the CJS build required from a .cjs file, a fake browser for the unload path, and
- * jsdom for the replay recorder. The parent never loads the SDK, so its server is not traced.
+ * runs in its own Node process, as a real consumer would, loading `@zharp/logs` and `@zharp/apm`
+ * by package name through the workspace links: the ESM builds imported from native .mjs files,
+ * the CJS builds required from .cjs files, the `/init` entries preloaded with `--require` and
+ * `--import`, a fake browser for the unload path, and jsdom for session replay. The parent never
+ * loads the SDK, so its server is not traced.
  *
  *     node test/run.mjs
  */
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert/strict';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SDK = 'js/1.4.0';
+const root = join(here, '..');
+const version = (pkg) => JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8')).version;
+const LOGS_SDK = `js-logs/${version('logs')}`;
+const APM_SDK = `js-apm/${version('apm')}`;
 const FETCH_LIMIT = 1_000_000;
 const BEACON_LIMIT = 60_000;
 
@@ -39,7 +45,7 @@ const server = http.createServer((req, res) => {
     requests.push(record);
 
     let status = 200;
-    if (req.url.startsWith('/api/v1/agent/replay')) {
+    if (req.url.startsWith('/api/v1/agent/replay') && req.headers['x-api-key'] === 'replay-flaky') {
       // Slow, so an overlapping flush would show up as two requests in flight.
       replayActive += 1;
       replayMaxActive = Math.max(replayMaxActive, replayActive);
@@ -57,10 +63,24 @@ const server = http.createServer((req, res) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const endpoint = `http://127.0.0.1:${server.address().port}/api/v1`;
 
-function run(file, env = {}, args = []) {
+/** The parent's environment without anything that would configure the SDK behind a test's back. */
+function cleanEnv() {
+  const env = { ...process.env };
+  for (const name of Object.keys(env)) {
+    if (name.startsWith('ZHARP_') || name === 'OTEL_SERVICE_NAME') delete env[name];
+  }
+  return env;
+}
+
+/**
+ * Run a fixture in its own Node process, from the repository root so `--require @zharp/logs/init`
+ * resolves the way it would in an application.
+ */
+function run(file, env = {}, args = [], nodeArgs = []) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [join(here, 'fixtures', file), ...args], {
-      env: { ...process.env, ZHARP_TEST_ENDPOINT: endpoint, ...env },
+    const child = spawn(process.execPath, [...nodeArgs, join(here, 'fixtures', file), ...args], {
+      cwd: root,
+      env: { ...cleanEnv(), ZHARP_TEST_ENDPOINT: endpoint, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -70,7 +90,7 @@ function run(file, env = {}, args = []) {
     child.on('exit', (code) => {
       const line = out.split('\n').find((l) => l.startsWith('RESULT '));
       if (code !== 0 || !line) return reject(new Error(`${file} exited ${code}\n${out}\n${err}`));
-      resolve({ result: JSON.parse(line.slice(7)), stderr: err });
+      resolve({ result: JSON.parse(line.slice(7)), stdout: out, stderr: err });
     });
   });
 }
@@ -78,9 +98,11 @@ function run(file, env = {}, args = []) {
 // ── tiny runner ──────────────────────────────────────────────────────────────
 
 let failures = 0;
+let passed = 0;
 function check(name, fn) {
   try {
     fn();
+    passed += 1;
     console.log(`  ok    ${name}`);
   } catch (error) {
     failures += 1;
@@ -88,28 +110,42 @@ function check(name, fn) {
   }
 }
 
-const logRequests = (key) => requests.filter((r) => r.url.startsWith('/api/v1/agent/logs') && (r.headers['x-api-key'] === key || r.url.endsWith(`/${key}`)));
+const keyOf = (r) => r.headers['x-api-key'] ?? decodeURIComponent(r.url.split('/').pop());
+const ofType = (type, key) =>
+  requests.filter((r) => r.url.startsWith(`/api/v1/agent/${type}`) && (key === undefined || keyOf(r) === key));
+const logRequests = (key) => ofType('logs', key);
+const traceRequests = (key) => ofType('traces', key);
 const entriesOf = (reqs) => reqs.flatMap((r) => r.body?.logs ?? []);
+const spansOf = (reqs) => reqs.flatMap((r) => r.body?.spans ?? []);
+const lines = (text) => text.split(/\r?\n/).filter((l) => l.startsWith('[Zharp]'));
 
-// ── Node: ESM and CJS ────────────────────────────────────────────────────────
+// ── Node: ESM and CJS, both packages ─────────────────────────────────────────
 
 for (const [label, file] of [['esm', 'node-consumer.mjs'], ['cjs', 'node-consumer.cjs']]) {
   console.log(`\n${label.toUpperCase()} consumer (${file})`);
-  const { result } = await run(file, { NODE_ENV: 'production' });
+  const { result, stdout } = await run(file, { NODE_ENV: 'production' });
   const service = `${label}-app`;
 
-  const logs = requests.filter((r) => r.url.startsWith('/api/v1/agent/logs') && entriesOf([r]).some((e) => e.service === service));
-  const traces = requests.filter((r) => r.url.startsWith('/api/v1/agent/traces') && (r.body?.spans ?? []).some((s) => s.serviceName === service));
+  const logs = logRequests().filter((r) => entriesOf([r]).some((e) => e.service === service));
+  const traces = traceRequests().filter((r) => spansOf([r]).some((s) => s.serviceName === service));
   const entries = entriesOf(logs);
-  const spans = traces.flatMap((r) => r.body.spans);
+  const spans = spansOf(traces);
 
-  check('requests go to the key-less path with X-API-KEY and X-Zharp-SDK', () => {
+  check('one activation line per package', () => {
+    assert.deepEqual(lines(stdout), [
+      `[Zharp] Logging active — service "${service}", environment "staging"`,
+      `[Zharp] APM active — service "${service}", environment "staging"`,
+    ]);
+  });
+
+  check('requests go to the key-less path with X-API-KEY and each package\'s X-Zharp-SDK', () => {
     assert.ok(logs.length && traces.length, 'expected log and trace requests');
     for (const r of [...logs, ...traces]) {
       assert.match(r.url, /^\/api\/v1\/agent\/(logs|traces)$/, r.url);
       assert.equal(r.headers['x-api-key'], 'test-key-123');
-      assert.equal(r.headers['x-zharp-sdk'], SDK);
     }
+    for (const r of logs) assert.equal(r.headers['x-zharp-sdk'], LOGS_SDK);
+    for (const r of traces) assert.equal(r.headers['x-zharp-sdk'], APM_SDK);
   });
 
   check('log body is { logs } only — no hostname/os/version', () => {
@@ -164,7 +200,7 @@ for (const [label, file] of [['esm', 'node-consumer.mjs'], ['cjs', 'node-consume
     assert.equal(log.metadata.traceId, serverA.traceId, 'log carries the request trace after await');
   });
 
-  check('span resource carries environment, version and source', () => {
+  check('span resource carries environment, version and source (taken from the logger)', () => {
     for (const s of spans) {
       assert.equal(s.resource['deployment.environment.name'], 'staging');
       assert.equal(s.resource['deployment.environment'], 'staging');
@@ -199,13 +235,79 @@ for (const [label, file] of [['esm', 'node-consumer.mjs'], ['cjs', 'node-consume
   }
 }
 
-// ── defaults from environment variables ─────────────────────────────────────
+// ── @zharp/logs: init() from the environment ─────────────────────────────────
+
+console.log('\n@zharp/logs: init() from the environment (logs-init.cjs)');
+{
+  const fromEnv = {
+    ZHARP_API_KEY: 'env-key',
+    ZHARP_SERVICE: 'env-only',
+    ZHARP_ENV: 'env-env',
+    ZHARP_VERSION: '7.0.0',
+    ZHARP_SOURCE: 'env-src',
+    ZHARP_ENDPOINT: endpoint,
+  };
+
+  const envRun = await run('logs-init.cjs', fromEnv, ['', 'env']);
+  check('init() with no arguments reads ZHARP_API_KEY/SERVICE/ENV/VERSION/SOURCE/ENDPOINT', () => {
+    assert.equal(envRun.result.active, true);
+    const reqs = logRequests('env-key').filter((r) => entriesOf([r]).some((e) => e.message === 'init-check env'));
+    assert.equal(reqs.length, 1, `${reqs.length} request(s)`);
+    const e = entriesOf(reqs)[0];
+    assert.equal(e.service, 'env-only');
+    assert.equal(e.environment, 'env-env');
+    assert.equal(e.version, '7.0.0');
+    assert.equal(e.source, 'env-src');
+    assert.equal(reqs[0].headers['x-zharp-sdk'], LOGS_SDK);
+  });
+  check('prints one activation line', () => {
+    assert.deepEqual(lines(envRun.stdout), ['[Zharp] Logging active — service "env-only", environment "env-env"']);
+  });
+
+  const otel = await run('logs-init.cjs', { ZHARP_API_KEY: 'otel-key', OTEL_SERVICE_NAME: 'otel-svc', NODE_ENV: 'node-env', ZHARP_ENDPOINT: endpoint }, ['', 'otel']);
+  check('service falls back to OTEL_SERVICE_NAME, environment to NODE_ENV', () => {
+    const e = entriesOf(logRequests('otel-key')).find((x) => x.message === 'init-check otel');
+    assert.equal(e.service, 'otel-svc');
+    assert.equal(e.environment, 'node-env');
+    assert.match(otel.stdout, /Logging active — service "otel-svc", environment "node-env"/);
+  });
+
+  const before = requests.length;
+  const noKey = await run('logs-init.cjs', { ZHARP_SERVICE: 'nokey-svc', ZHARP_ENDPOINT: endpoint }, ['', 'nokey']);
+  check('no API key: prints the hint, starts nothing, sends nothing', () => {
+    assert.equal(noKey.result.active, false);
+    assert.match(noKey.stderr, /\[Zharp\] No API key found — set ZHARP_API_KEY or call ZharpLogger\.init\(\{ apiKey \}\)/);
+    assert.equal(lines(noKey.stdout).length, 0, 'no activation line');
+    assert.equal(requests.length, before, 'no request reached the backend');
+  });
+
+  const explicit = { service: 'explicit-svc', environment: 'explicit-env', appVersion: '8.0.0' };
+  await run('logs-init.cjs', { ...fromEnv, ZHARP_API_KEY: 'override-key' }, [JSON.stringify(explicit), 'override']);
+  check('explicit options override the environment; the rest still comes from it', () => {
+    const e = entriesOf(logRequests('override-key')).find((x) => x.message === 'init-check override');
+    assert.equal(e.service, 'explicit-svc');
+    assert.equal(e.environment, 'explicit-env');
+    assert.equal(e.version, '8.0.0');
+    assert.equal(e.source, 'env-src', 'source still from ZHARP_SOURCE');
+  });
+
+  for (const value of ['true', '1']) {
+    const beforeDisabled = requests.length;
+    const disabled = await run('logs-init.cjs', { ...fromEnv, ZHARP_API_KEY: 'disabled-key', ZHARP_DISABLED: value }, ['', 'disabled']);
+    check(`ZHARP_DISABLED=${value}: says so, starts nothing, sends nothing`, () => {
+      assert.equal(disabled.result.active, false);
+      assert.deepEqual(lines(disabled.stdout), ['[Zharp] Logging disabled by ZHARP_DISABLED — nothing will be sent']);
+      assert.equal(requests.length, beforeDisabled);
+    });
+  }
+}
+
+// ── 1.4.0: defaults from environment variables with an explicit key ──────────
 
 console.log('\nDefaults from environment variables (env-defaults.cjs)');
 {
-  await run('env-defaults.cjs', { ZHARP_SERVICE: 'env-svc', ZHARP_ENV: '', NODE_ENV: 'test', ZHARP_VERSION: '9.9.9', OTEL_SERVICE_NAME: '' }, ['vars']);
-  const bare = { ZHARP_SERVICE: '', OTEL_SERVICE_NAME: '', ZHARP_ENV: '', NODE_ENV: '', ZHARP_VERSION: '' };
-  const { stderr } = await run('env-defaults.cjs', bare, ['bare']);
+  await run('env-defaults.cjs', { ZHARP_SERVICE: 'env-svc', NODE_ENV: 'test', ZHARP_VERSION: '9.9.9' }, ['vars']);
+  const { stderr } = await run('env-defaults.cjs', { NODE_ENV: '' }, ['bare']);
   const entries = entriesOf(logRequests('test-key-env'));
 
   check('service/environment/version fall back to ZHARP_SERVICE, NODE_ENV, ZHARP_VERSION', () => {
@@ -225,6 +327,154 @@ console.log('\nDefaults from environment variables (env-defaults.cjs)');
   });
 }
 
+// ── init() again replaces the running setup ──────────────────────────────────
+
+console.log('\nRe-init replaces (reinit.cjs)');
+{
+  const { result, stdout } = await run('reinit.cjs');
+
+  check('second init() is not refused: two activation lines per package', () => {
+    assert.deepEqual(lines(stdout), [
+      '[Zharp] Logging active — service "reinit-a", no environment set',
+      '[Zharp] APM active — service "reinit-a", no environment set',
+      '[Zharp] Logging active — service "reinit-b", no environment set',
+      '[Zharp] APM active — service "reinit-b", no environment set',
+    ]);
+  });
+  check('logs queued before re-init go out under the old key; later ones under the new', () => {
+    assert.deepEqual(entriesOf(logRequests('reinit-a')).map((e) => `${e.service}:${e.message}`), ['reinit-a:reinit before']);
+    assert.deepEqual(entriesOf(logRequests('reinit-b')).map((e) => `${e.service}:${e.message}`), ['reinit-b:reinit after']);
+  });
+  check('spans likewise', () => {
+    assert.deepEqual(spansOf(traceRequests('reinit-a')).map((s) => `${s.serviceName}:${s.name}`), ['reinit-a:span-a']);
+    assert.deepEqual(spansOf(traceRequests('reinit-b')).map((s) => `${s.serviceName}:${s.name}`), ['reinit-b:span-b']);
+  });
+  check('handlers are replaced, not added to; destroy() removes them all', () => {
+    assert.deepEqual(result.afterSecond, result.afterFirst);
+    assert.equal(result.afterFirst.uncaught, result.initial.uncaught + 1);
+    assert.equal(result.afterFirst.rejection, result.initial.rejection + 1);
+    assert.deepEqual(result.final, result.initial);
+  });
+}
+
+// ── node --require / --import of the init entries ────────────────────────────
+
+console.log('\nPreloading the init entries');
+{
+  const env = (service) => ({ ZHARP_API_KEY: 'preload-key', ZHARP_SERVICE: service, ZHARP_ENV: 'preload-env', ZHARP_ENDPOINT: endpoint });
+  const cases = [
+    ['--require @zharp/logs/init', 'preload-app.cjs', 'require-cjs'],
+    ['--import @zharp/logs/init', 'preload-app.mjs', 'import-esm'],
+    // The mixed case: the ESM init entry starts the logger, the CommonJS app requires it.
+    ['--import @zharp/logs/init', 'preload-app.cjs', 'import-cjs'],
+  ];
+  for (const [flag, file, tag] of cases) {
+    const { result, stdout } = await run(file, env(`preload-${tag}`), [tag], flag.split(' '));
+    check(`node ${flag} ${file}: the app's logger is the one started, from the environment`, () => {
+      assert.equal(result.active, true);
+      assert.deepEqual(lines(stdout), [`[Zharp] Logging active — service "preload-${tag}", environment "preload-env"`]);
+      const e = entriesOf(logRequests('preload-key')).find((x) => x.message === `preloaded ${tag}`);
+      assert.ok(e, 'log sent');
+      assert.equal(e.service, `preload-${tag}`);
+    });
+  }
+
+  const apmCases = [
+    ['--require @zharp/apm/init', 'preload-apm.cjs', 'apm-cjs'],
+    ['--import @zharp/apm/init', 'preload-apm.mjs', 'apm-esm'],
+  ];
+  for (const [flag, file, tag] of apmCases) {
+    const { result, stdout } = await run(file, env(`preload-${tag}`), [tag], flag.split(' '));
+    check(`node ${flag} ${file}: http is traced with no code in the app`, () => {
+      assert.equal(result.active, true);
+      assert.deepEqual(lines(stdout), [`[Zharp] APM active — service "preload-${tag}", environment "preload-env"`]);
+      const spans = spansOf(traceRequests('preload-key')).filter((s) => s.serviceName === `preload-${tag}`);
+      const names = spans.map((s) => `${s.kind} ${s.name}`);
+      assert.ok(names.includes(`SERVER GET /preloaded-${tag}`), names.join(', '));
+      assert.ok(names.includes(`CLIENT GET /preloaded-${tag}`), names.join(', '));
+    });
+  }
+}
+
+// ── logs ⇄ apm through the shared handle ─────────────────────────────────────
+
+console.log('\nLogs and APM together (correlation.cjs)');
+{
+  const { result, stdout } = await run('correlation.cjs');
+  const entries = entriesOf(logRequests('test-key-corr'));
+  const spans = spansOf(traceRequests('test-key-corr'));
+  const find = (message) => entries.find((e) => e.message === message);
+
+  check('ZharpAPM.init() with no options reuses the logger\'s key, service, environment, version, source and endpoint', () => {
+    assert.match(stdout, /APM active — service "corr-app", environment "corr-env"/);
+    const span = spans.find((s) => s.name === 'corr-span');
+    assert.ok(span, 'span sent with the logger\'s key to the logger\'s endpoint');
+    assert.equal(span.serviceName, 'corr-app');
+    assert.equal(span.resource['deployment.environment.name'], 'corr-env');
+    assert.equal(span.resource['service.version'], '3.1.4');
+    assert.equal(span.resource['zharp.source'], 'corr-src');
+  });
+  check('logs carry traceId/spanId while APM is active', () => {
+    const e = find('corr with apm');
+    assert.equal(e.metadata.traceId, result.spanTrace);
+    assert.equal(e.metadata.spanId, spans.find((s) => s.name === 'corr-span').spanId);
+  });
+  check('…and not before APM starts or after it stops', () => {
+    assert.equal('traceId' in find('corr no apm').metadata, false);
+    assert.equal('traceId' in find('corr after apm').metadata, false);
+  });
+  check('both packages use the same sessionId', () => {
+    const [logsSession, apmSession] = result.sessions;
+    assert.equal(logsSession, apmSession);
+    for (const e of entries) assert.equal(e.metadata.sessionId, logsSession);
+  });
+  check('a warning logged during APM joins its breadcrumb trail', () => {
+    assert.ok(result.crumbs.includes('log:corr with apm'), result.crumbs.join(', '));
+  });
+}
+
+console.log('\nAPM without logs (apm-alone.cjs)');
+{
+  const { result, stdout } = await run('apm-alone.cjs', { ZHARP_API_KEY: 'apm-alone-key', ZHARP_SERVICE: 'apm-alone', ZHARP_ENV: 'alone-env', ZHARP_ENDPOINT: endpoint });
+  check('init() from the environment traces http; @zharp/logs is never loaded', () => {
+    assert.equal(result.active, true);
+    assert.equal(result.logsLoaded, false);
+    assert.equal(result.handleLogs, false);
+    assert.deepEqual(lines(stdout), ['[Zharp] APM active — service "apm-alone", environment "alone-env"']);
+    const spans = spansOf(traceRequests('apm-alone-key'));
+    assert.ok(spans.some((s) => s.kind === 'SERVER' && s.name === 'GET /alone' && s.serviceName === 'apm-alone'));
+    for (const r of traceRequests('apm-alone-key')) assert.equal(r.headers['x-zharp-sdk'], APM_SDK);
+  });
+
+  const before = requests.length;
+  const noKey = await run('apm-alone.cjs', { ZHARP_SERVICE: 'apm-nokey', ZHARP_ENDPOINT: endpoint });
+  check('no API key: prints the hint, patches nothing, sends nothing', () => {
+    assert.equal(noKey.result.active, false);
+    assert.match(noKey.stderr, /\[Zharp\] No API key found — set ZHARP_API_KEY or call ZharpAPM\.init\(\{ apiKey \}\)/);
+    assert.equal(requests.length, before);
+  });
+
+  const disabled = await run('apm-alone.cjs', { ZHARP_API_KEY: 'apm-disabled', ZHARP_DISABLED: 'true', ZHARP_ENDPOINT: endpoint });
+  check('ZHARP_DISABLED=true: APM says so and sends nothing', () => {
+    assert.equal(disabled.result.active, false);
+    assert.deepEqual(lines(disabled.stdout), ['[Zharp] APM disabled by ZHARP_DISABLED — nothing will be sent']);
+    assert.equal(traceRequests('apm-disabled').length, 0);
+  });
+
+  const explicit = { apiKey: 'apm-explicit', service: 'apm-explicit-svc', environment: 'explicit-env' };
+  await run('apm-alone.cjs', { ZHARP_API_KEY: 'apm-env-key', ZHARP_SERVICE: 'apm-env-svc', ZHARP_VERSION: '5.5.5', ZHARP_ENDPOINT: endpoint }, [JSON.stringify(explicit)]);
+  check('explicit options override the environment', () => {
+    assert.equal(traceRequests('apm-env-key').length, 0);
+    const spans = spansOf(traceRequests('apm-explicit'));
+    assert.ok(spans.length);
+    for (const s of spans) {
+      assert.equal(s.serviceName, 'apm-explicit-svc');
+      assert.equal(s.resource['deployment.environment.name'], 'explicit-env');
+      assert.equal(s.resource['service.version'], '5.5.5', 'version still from ZHARP_VERSION');
+    }
+  });
+}
+
 // ── a Node script that never calls destroy() ─────────────────────────────────
 
 console.log('\nExit without destroy (exit-without-destroy.cjs)');
@@ -240,8 +490,9 @@ console.log('\nExit without destroy (exit-without-destroy.cjs)');
     assert.equal(exited, true, 'still running after 15 s');
     assert.ok(Date.now() - started < 15_000);
   });
-  check('what was queued at exit was sent', () => {
-    assert.deepEqual(entries.map((e) => e.message).sort(), ['exit-check 0', 'exit-check 1', 'exit-check 2']);
+  check('what was queued at exit was sent — logs and spans', () => {
+    assert.deepEqual(entries.map((e) => e.message).sort(), ['exit-check 0', 'exit-check 1', 'exit-check 2', 'exit-check in span']);
+    assert.deepEqual(spansOf(traceRequests('test-key-exit')).map((s) => s.name), ['exit-span']);
   });
 }
 
@@ -249,9 +500,13 @@ console.log('\nExit without destroy (exit-without-destroy.cjs)');
 
 console.log('\nBrowser unload (browser-beacon.mjs)');
 {
-  const { result } = await run('browser-beacon.mjs', { NODE_ENV: 'production' });
+  const { result, stdout } = await run('browser-beacon.mjs', { NODE_ENV: 'production' });
   const beacons = result.beacons;
   const fallback = logRequests('test-key-beacon');
+
+  check('browser: one activation line via console.info', () => {
+    assert.deepEqual(lines(stdout), ['[Zharp] Logging active — service "browser-app", no environment set']);
+  });
 
   check(`beacons are chunked under ${BEACON_LIMIT} bytes and use /agent/logs/<key>`, () => {
     assert.ok(beacons.length >= 4, `${beacons.length} beacon(s)`);
@@ -282,12 +537,42 @@ console.log('\nBrowser unload (browser-beacon.mjs)');
   });
 }
 
+// ── replay loads lazily ──────────────────────────────────────────────────────
+
+console.log('\nReplay is loaded lazily (replay-lazy.mjs)');
+{
+  const sampledIn = await run('replay-lazy.mjs', {}, ['sampled-in']);
+  check('rrweb is not loaded by ZharpAPM.init() without replay', () => {
+    assert.equal(sampledIn.result.afterPlainInit, false);
+  });
+  check('rrweb is loaded, and recording starts, once replay is enabled', () => {
+    assert.equal(sampledIn.result.afterReplayInit, true);
+    assert.equal(sampledIn.result.recording, true);
+    assert.equal(sampledIn.result.isReplaying, true);
+  });
+  check('the activation line mentions the replay sample rate', () => {
+    assert.ok(lines(sampledIn.stdout).includes('[Zharp] APM active — service "lazy-app", no environment set, session replay at 50% of sessions'), sampledIn.stdout);
+  });
+
+  const cjs = await run('require-no-rrweb.cjs');
+  check('require() of both CommonJS builds and ZharpAPM.init() do not load rrweb', () => {
+    assert.equal(cjs.result.loaded, false);
+  });
+
+  const sampledOut = await run('replay-lazy.mjs', {}, ['sampled-out']);
+  check('a session sampled out never loads rrweb', () => {
+    assert.equal(sampledOut.result.afterReplayInit, false);
+    assert.equal(sampledOut.result.recording, false);
+    assert.equal(sampledOut.result.isReplaying, false);
+  });
+}
+
 // ── replay retry ─────────────────────────────────────────────────────────────
 
 console.log('\nReplay retry (replay-retry.mjs)');
 {
   await run('replay-retry.mjs');
-  const replay = requests.filter((r) => r.url.startsWith('/api/v1/agent/replay'));
+  const replay = ofType('replay', 'replay-flaky');
   const bySeq = new Map();
   for (const r of replay) {
     if (!bySeq.has(r.body.sequence)) bySeq.set(r.body.sequence, []);
@@ -295,10 +580,11 @@ console.log('\nReplay retry (replay-retry.mjs)');
   }
 
   check('replay uses the key-less path with X-API-KEY and X-Zharp-SDK', () => {
+    assert.ok(replay.length);
     for (const r of replay) {
       assert.equal(r.url, '/api/v1/agent/replay');
       assert.equal(r.headers['x-api-key'], 'replay-flaky');
-      assert.equal(r.headers['x-zharp-sdk'], SDK);
+      assert.equal(r.headers['x-zharp-sdk'], APM_SDK);
     }
   });
 
@@ -320,5 +606,5 @@ console.log('\nReplay retry (replay-retry.mjs)');
 }
 
 server.close();
-console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
+console.log(failures ? `\n${failures} check(s) failed, ${passed} passed` : `\nAll ${passed} checks passed`);
 process.exit(failures ? 1 : 0);

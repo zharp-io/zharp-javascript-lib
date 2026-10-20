@@ -1,5 +1,5 @@
 // init() without service, environment or appVersion: whatever the environment variables give.
-const { ZharpLogger } = require('../../dist/index.js');
+const { ZharpLogger } = require('@zharp/logs');
 
 ZharpLogger.init({
   apiKey: 'test-key-env',
