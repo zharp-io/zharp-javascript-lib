@@ -22,8 +22,8 @@ npm install @zharp/logs
 3. Click **Create key** and copy the key — it's shown only once.
 
 <p>
-  <img src="https://zharp.io/images/docs/api-key-create.png" alt="Create API key, with Ingest only ticked" width="48%">
-  <img src="https://zharp.io/images/docs/api-key-created.png" alt="The new key, shown once with a Copy button" width="48%">
+  <img src="https://www.zharp.io/images/docs/api-key-create.png" alt="Create API key, with Ingest only ticked" width="48%">
+  <img src="https://www.zharp.io/images/docs/api-key-created.png" alt="The new key, shown once with a Copy button" width="48%">
 </p>
 
 ## 3. Start it
@@ -82,7 +82,7 @@ ZharpLogger.error('Payment failed', { orderId: 99, reason: 'insufficient_funds' 
 Sign in at [zharp.io](https://zharp.io/login), open **Logs**, and pick your service in the
 service dropdown.
 
-![The Logs page on zharp.io, showing lines from the zharp-backend service](https://zharp.io/images/docs/logs-dashboard.png)
+![The Logs page on zharp.io, showing lines from the zharp-backend service](https://www.zharp.io/images/docs/logs-dashboard.png)
 
 New lines appear as they arrive. Click one to see everything it carried. To be told when
 something shows up, add a [log monitor](https://zharp.io/docs/monitors/logs).
