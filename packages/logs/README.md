@@ -28,35 +28,38 @@ npm install @zharp/logs
 
 ## 3. Start it
 
-**Node.js** — set the key in the environment:
+Call `init()` once, as early as possible in your app. Give it your key in code, or let it read
+the key from the environment — either works.
+
+**In code** — pass the options to `init()`. This works everywhere, and in the browser it's the
+only way:
+
+```typescript
+import { ZharpLogger } from '@zharp/logs';
+
+ZharpLogger.init({ apiKey: 'your-ingest-only-key', service: 'checkout-api' });
+```
+
+**From the environment** (Node.js) — set the variables and call `init()` with nothing:
 
 ```bash
 ZHARP_API_KEY=your-ingest-only-key
-ZHARP_SERVICE=checkout-api        # optional — defaults to the name in your package.json
-ZHARP_ENV=production              # optional — defaults to NODE_ENV
+ZHARP_SERVICE=checkout-api
 ```
 
-then call `init()` once, as early as possible in your app:
-
 ```typescript
-import { ZharpLogger } from '@zharp/logs';
-
 ZharpLogger.init();
 ```
 
-or, without touching your code, start Node with:
+You can mix the two: what you pass to `init()` is used, and anything you leave out is read from
+the environment. In Node, `service` can be left out altogether — it defaults to the `name` in your
+package.json; `environment` defaults to `ZHARP_ENV`, then `NODE_ENV`.
+
+Prefer not to touch your code at all? With the variables set, start Node like this — it calls
+`init()` for you:
 
 ```bash
 node --import @zharp/logs/init app.js
-```
-
-**Browser** (React, Vue, Next.js, …) — there is no environment to read, so pass the key and a
-service name:
-
-```typescript
-import { ZharpLogger } from '@zharp/logs';
-
-ZharpLogger.init({ apiKey: 'your-ingest-only-key', service: 'checkout-web' });
 ```
 
 When it starts, it prints one line so you know it's working:
@@ -65,7 +68,8 @@ When it starts, it prints one line so you know it's working:
 [Zharp] Logging active — service "checkout-api", environment "production"
 ```
 
-With no API key it prints how to give it one and sends nothing.
+With no API key — neither passed nor in the environment — it prints how to give it one and sends
+nothing.
 
 ## 4. Log
 

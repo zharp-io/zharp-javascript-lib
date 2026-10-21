@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.2
+
+- README: "Start it" shows both ways — options passed to `init()`, or the environment read by
+  `init()` with nothing — and that they combine.
+
 ## 1.2.1
 
 - **The service name defaults to your app's name.** In Node, with no `service` option,
