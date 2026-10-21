@@ -41,8 +41,7 @@ ZHARP_ENV=production            # or leave it to NODE_ENV
 Then start the SDK without touching your code:
 
 ```bash
-node --require @zharp/logs/init app.js     # CommonJS
-node --import @zharp/logs/init app.js      # ES modules
+node --import @zharp/logs/init app.js
 ```
 
 …or with one line at the top of your entry file:
@@ -140,15 +139,14 @@ To be told when something shows up, add a [log monitor](https://zharp.io/docs/mo
 A browser reads none of them — bundles often carry a `process.env` baked in at build time, which
 would tag a page with the build machine's settings.
 
-### Preloading with `--require` / `--import`
+### Preloading with `--import`
 
 `@zharp/logs/init` is a tiny module that calls `ZharpLogger.init()` from the environment, and
-nothing else. It ships as both CommonJS and ESM:
+nothing else. It works for CommonJS and ES module apps alike (Node 18.19 or later):
 
 ```bash
-node --require @zharp/logs/init dist/main.js
-node --import @zharp/logs/init dist/main.mjs
-NODE_OPTIONS="--require @zharp/logs/init" npm start
+node --import @zharp/logs/init dist/main.js
+NODE_OPTIONS="--import @zharp/logs/init" npm start   # when you don't control the node command
 ```
 
 The application then uses `ZharpLogger` as usual — it gets the logger that was started, whether it
@@ -392,7 +390,7 @@ the process alive, and whatever is still queued is sent on `beforeExit`.
 
 ## Integrations
 
-Use `@zharp/logs` as a transport layer alongside your existing logger so logs flow to Zharp without replacing your current setup. Each recipe assumes the SDK was started — by `ZharpLogger.init()` or `--require @zharp/logs/init`.
+Use `@zharp/logs` as a transport layer alongside your existing logger so logs flow to Zharp without replacing your current setup. Each recipe assumes the SDK was started — by `ZharpLogger.init()` or `--import @zharp/logs/init`.
 
 ### Winston
 

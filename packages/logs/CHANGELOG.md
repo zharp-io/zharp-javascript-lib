@@ -26,7 +26,7 @@ appVersion, autoCapture, flushInterval, maxBatchSize })` and every logging metho
   `ZHARP_SERVICE` (then `OTEL_SERVICE_NAME`), `ZHARP_ENV` (then `NODE_ENV`), `ZHARP_VERSION`,
   `ZHARP_SOURCE` and `ZHARP_ENDPOINT`. Options passed to `init()` override them one by one. In the
   browser nothing is read from the environment.
-- **`@zharp/logs/init`**, for starting without code changes: `node --require @zharp/logs/init app.js`
+- **`@zharp/logs/init`**, for starting without code changes: `node --import @zharp/logs/init app.js`
   (CommonJS) or `node --import @zharp/logs/init app.js` (ES modules). An app that `require`s the
   package after an `--import` preload gets the same, already started logger.
 - **An activation line.** A successful `init()` prints

@@ -26,9 +26,7 @@ Use an **Ingest only** API key — one that can send data but never read it.
 
 ```bash
 ZHARP_API_KEY=your-api-key ZHARP_SERVICE=checkout-api ZHARP_ENV=production \
-  node --require @zharp/apm/init app.js     # CommonJS
-# or
-  node --import @zharp/apm/init app.js      # ES modules
+  node --import @zharp/apm/init app.js
 ```
 
 ```
@@ -71,7 +69,7 @@ ZharpLogger.init({ apiKey: 'your-api-key', service: 'checkout-web', environment:
 ZharpAPM.init();
 ```
 
-In Node, preload both: `node --require @zharp/logs/init --require @zharp/apm/init app.js`.
+In Node, preload both: `node --import @zharp/logs/init --import @zharp/apm/init app.js`.
 
 From then on, a log written inside a trace carries its `traceId` and `spanId`, both packages share
 one `sessionId`, warnings and errors join the breadcrumb trail, and a logged error flags the
