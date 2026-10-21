@@ -16,9 +16,15 @@ npm install @zharp/logs
 
 ## 2. Get an API key
 
-In Zharp, go to **Integrations & API → Main API keys** and create a key with the **Ingest only**
-scope. It can send logs but can't read anything, so it's safe to put in a server's environment or a
-browser bundle.
+1. In Zharp, open **Integrations & API** and choose **Main API keys**.
+2. Click **Create API key**, give it a name, and tick **Ingest only**. That key can send logs but
+   can't read anything, so it's safe in a server's environment or a browser bundle.
+3. Click **Create key** and copy the key — it's shown only once.
+
+<p>
+  <img src="https://zharp.io/images/docs/api-key-create.png" alt="Create API key, with Ingest only ticked" width="48%">
+  <img src="https://zharp.io/images/docs/api-key-created.png" alt="The new key, shown once with a Copy button" width="48%">
+</p>
 
 ## 3. Start it
 
