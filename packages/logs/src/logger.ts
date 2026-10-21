@@ -7,7 +7,7 @@ import { getRuntimeContext, refreshContext } from './context';
 import { getSessionId } from '@zharp/internal/session';
 import { normalizeEndpoint } from '@zharp/internal/delivery';
 import { toMessage } from '@zharp/internal/message';
-import { announce, describeTarget, disabledByEnv, pick, readEnv, warn } from '@zharp/internal/env';
+import { announce, describeTarget, disabledByEnv, packageName, pick, readEnv, warn } from '@zharp/internal/env';
 import { ActiveSpan, PublishedConfig, shared } from '@zharp/internal/shared';
 
 const LEVELS = new Set(['debug', 'info', 'warn', 'error', 'fatal']);
@@ -92,11 +92,12 @@ export class ZharpLoggerClass {
       return;
     }
 
-    let service = pick(config.service, env.service);
+    // Explicit, then the environment, then the app's package.json name.
+    let service = pick(config.service, env.service, packageName());
     if (!service) {
       // Warn rather than throw: a missing name should not be the reason an application fails
       // to start, and the logs are still worth having under a placeholder.
-      warn("No service name — pass `service` to init() or set ZHARP_SERVICE. Using 'unknown-service'.");
+      warn("No service name — pass `service` to init(), set ZHARP_SERVICE, or give your package.json a name. Using 'unknown-service'.");
       service = 'unknown-service';
     }
 

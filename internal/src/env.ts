@@ -6,6 +6,8 @@
  * the first few lines of output whether — and as what — the application is reporting.
  */
 
+import { loadBuiltin } from './builtins';
+
 /**
  * An environment variable, in Node only.
  *
@@ -53,6 +55,37 @@ export function readEnv(): EnvConfig {
     endpoint: nodeEnv('ZHARP_ENDPOINT'),
     captureConsole: nodeEnv('ZHARP_CAPTURE_CONSOLE'),
   };
+}
+
+/**
+ * The app's own name, from the nearest package.json above the script Node was started with (or
+ * the working directory) — the name a service gets when none is configured, as dd-trace does.
+ * A scope is dropped: "@acme/checkout-api" is "checkout-api". Nothing in a browser.
+ */
+export function packageName(): string | undefined {
+  if (typeof window !== 'undefined' || typeof process === 'undefined') return undefined;
+  const fs = loadBuiltin('fs');
+  const path = loadBuiltin('path');
+  if (!fs || !path) return undefined;
+  const starts = [process.argv?.[1] ? path.dirname(path.resolve(process.argv[1])) : '', process.cwd?.() ?? ''];
+  for (const start of starts.filter(Boolean)) {
+    let dir = start;
+    for (let i = 0; i < 12; i++) {
+      // A dependency's own package.json is not the app's.
+      if (path.basename(dir) !== 'node_modules') {
+        try {
+          const name = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))?.name;
+          if (typeof name === 'string' && name.trim()) return name.trim().replace(/^@[^/]+\//, '');
+        } catch {
+          // No package.json here, or not one we can read: keep looking further up.
+        }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return undefined;
 }
 
 /** `ZHARP_DISABLED=true` (or `1`, `yes`): start nothing, whatever the code asks for. */

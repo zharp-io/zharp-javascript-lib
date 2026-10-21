@@ -10,6 +10,9 @@
   `info` logs, `warn` `warn`, `error` `error`, `debug` `debug`; an Error argument's stack is kept
   in the metadata. The SDK's own `[Zharp]` lines are never sent, and the activation line says when
   the console is captured.
+- **The service name defaults to your app's name.** In Node, with no `service` option,
+  `ZHARP_SERVICE` or `OTEL_SERVICE_NAME`, it is the `name` in the app's package.json (without its
+  scope: `@acme/checkout-api` is `checkout-api`) instead of `'unknown-service'`.
 
 ## 1.1.0
 

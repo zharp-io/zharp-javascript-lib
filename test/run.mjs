@@ -307,6 +307,7 @@ console.log('\n@zharp/logs: init() from the environment (logs-init.cjs)');
 console.log('\nDefaults from environment variables (env-defaults.cjs)');
 {
   await run('env-defaults.cjs', { ZHARP_SERVICE: 'env-svc', NODE_ENV: 'test', ZHARP_VERSION: '9.9.9' }, ['vars']);
+  const pkg = await run('env-defaults.cjs', { NODE_ENV: '' }, ['pkg']);
   const { stderr } = await run('env-defaults.cjs', { NODE_ENV: '' }, ['bare']);
   const entries = entriesOf(logRequests('test-key-env'));
 
@@ -316,6 +317,13 @@ console.log('\nDefaults from environment variables (env-defaults.cjs)');
     assert.equal(e.environment, 'test');
     assert.equal(e.version, '9.9.9');
     assert.equal('source' in e, false);
+  });
+
+  check("no service given: the app's package.json name, without its scope", () => {
+    const e = entries.find((x) => x.message === 'env-check pkg');
+    assert.equal(e.service, 'checkout-api');
+    assert.match(pkg.stdout + pkg.stderr, /Logging active — service "checkout-api"/);
+    assert.doesNotMatch(pkg.stderr, /No service name/);
   });
 
   check("no service anywhere: warns and uses 'unknown-service'; no environment invented", () => {

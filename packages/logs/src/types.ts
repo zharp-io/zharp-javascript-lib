@@ -35,9 +35,9 @@ export interface ZharpConfig {
   /**
    * Default service name attached to all logs from this SDK instance.
    *
-   * In Node it falls back to the `ZHARP_SERVICE`, then `OTEL_SERVICE_NAME` environment variable.
-   * With none of the three, the SDK warns and files everything under 'unknown-service' — so in a
-   * browser, always set it.
+   * In Node it falls back to `ZHARP_SERVICE`, then `OTEL_SERVICE_NAME`, then the `name` in your
+   * app's package.json (without its scope). With none of them — always the case in a browser,
+   * so set it there — the SDK warns and files everything under 'unknown-service'.
    */
   service?: string;
   /**

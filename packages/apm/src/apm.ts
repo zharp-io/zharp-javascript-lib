@@ -9,7 +9,7 @@ import type { Breadcrumb } from './trace/breadcrumbs';
 import type { ReplayRecorder } from './replay/recorder';
 import { ReplayOptions, ZharpAPMConfig } from './types';
 import { normalizeEndpoint } from '@zharp/internal/delivery';
-import { announce, describeTarget, disabledByEnv, pick, readEnv, warn } from '@zharp/internal/env';
+import { announce, describeTarget, disabledByEnv, packageName, pick, readEnv, warn } from '@zharp/internal/env';
 import { PublishedConfig, shared } from '@zharp/internal/shared';
 
 const isBrowser = () => typeof window !== 'undefined' && typeof document !== 'undefined';
@@ -88,9 +88,9 @@ export class ZharpAPMClass {
       return;
     }
 
-    let service = pick(config.service, logs?.service, env.service);
+    let service = pick(config.service, logs?.service, env.service, packageName());
     if (!service) {
-      warn("No service name — pass `service` to init() or set ZHARP_SERVICE. Using 'unknown-service'.");
+      warn("No service name — pass `service` to init(), set ZHARP_SERVICE, or give your package.json a name. Using 'unknown-service'.");
       service = 'unknown-service';
     }
     const environment = pick(config.environment, logs?.environment, env.environment);

@@ -89,7 +89,7 @@ so each works alone, and an app using only one never bundles the other.
   | Variable | Option |
   |---|---|
   | `ZHARP_API_KEY` | `apiKey` |
-  | `ZHARP_SERVICE`, then `OTEL_SERVICE_NAME` | `service` |
+  | `ZHARP_SERVICE`, then `OTEL_SERVICE_NAME` (else the `name` in package.json) | `service` |
   | `ZHARP_ENV`, then `NODE_ENV` | `environment` |
   | `ZHARP_VERSION` | `version` |
   | `ZHARP_SOURCE` | `source` |
