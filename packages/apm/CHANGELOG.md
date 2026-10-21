@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+- **The service name defaults to your app's name.** In Node, with no `service` option, a
+  started `@zharp/logs`, `ZHARP_SERVICE` or `OTEL_SERVICE_NAME`, it is the `name` in the app's
+  package.json (without its scope) instead of `'unknown-service'`.
+
 ## 1.0.0
 
 First release. Tracing and session replay used to be part of `@zharp/logs` in builds that were
