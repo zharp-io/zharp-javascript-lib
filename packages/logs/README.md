@@ -89,6 +89,21 @@ ZharpLogger.warn('Slow network detected', { latencyMs: 3200 });
 ZharpLogger.error('Payment failed', { orderId: 99, reason: 'insufficient_funds' });
 ```
 
+### See them on your dashboard
+
+Sign in at [zharp.io](https://zharp.io/login), open **Logs** in the sidebar, and pick your
+service in the service dropdown — the `service` name you gave `init()` (or `ZHARP_SERVICE`).
+
+![The Logs page on zharp.io, showing lines from the zharp-backend service](https://zharp.io/images/docs/logs-dashboard.png)
+
+- New lines appear as they arrive while **LIVE** is on; click it to pause the stream.
+- **1H** and **24H** show history; **LEVELS** filters by level.
+- The search box finds words in the lines, and `@field` conditions such as
+  `@http.status_code>=500` filter on fields parsed from them.
+- Click a line to see everything it carried: its metadata, the error stack, the session id.
+
+To be told when something shows up, add a [log monitor](https://zharp.io/docs/monitors/logs).
+
 ---
 
 ## Starting up
