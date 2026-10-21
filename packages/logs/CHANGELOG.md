@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1
+
+- **The service name defaults to your app's name.** In Node, with no `service` option,
+  `ZHARP_SERVICE` or `OTEL_SERVICE_NAME`, it is the `name` in the app's package.json (without its
+  scope: `@acme/checkout-api` is `checkout-api`) instead of `'unknown-service'`.
+- A shorter README: the steps in order — install, API key, start, log, see your logs — with
+  screenshots, then the options.
+
 ## 1.2.0
 
 ### Added
@@ -10,9 +18,6 @@
   `info` logs, `warn` `warn`, `error` `error`, `debug` `debug`; an Error argument's stack is kept
   in the metadata. The SDK's own `[Zharp]` lines are never sent, and the activation line says when
   the console is captured.
-- **The service name defaults to your app's name.** In Node, with no `service` option,
-  `ZHARP_SERVICE` or `OTEL_SERVICE_NAME`, it is the `name` in the app's package.json (without its
-  scope: `@acme/checkout-api` is `checkout-api`) instead of `'unknown-service'`.
 
 ## 1.1.0
 
