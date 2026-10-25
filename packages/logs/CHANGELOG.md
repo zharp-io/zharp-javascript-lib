@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.3
+
+- **Caught errors arrive with their stack, with no extra code.** `ZharpLogger.error(err)` sends
+  the error's name and stack along with its message, and an Error anywhere in the metadata —
+  `ZharpLogger.error('Payment failed', { err })` — is sent as its name, message, stack, `cause`
+  and own fields instead of `{}`. A top-level error's stack becomes the log's `stack`, which the
+  Zharp log viewer shows as a stack trace. A `stack` you pass yourself is kept.
+- package.json: repository and issue links point to github.com/zharp-io/zharp-javascript-lib.
+
 ## 1.2.2
 
 - README: "Start it" shows both ways — options passed to `init()`, or the environment read by

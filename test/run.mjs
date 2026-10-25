@@ -551,6 +551,53 @@ console.log('\nConsole capture (console-capture.cjs)');
   });
 }
 
+// ── caught errors carry their stack ──────────────────────────────────────────
+
+{
+  console.log('\ncaught errors (errors-logged.cjs)');
+  await run('errors-logged.cjs');
+  const entries = entriesOf(logRequests('errors-logged'));
+  const byMessage = (m) => entries.find((e) => e.message === m);
+
+  check('error(err): the message, plus the name and stack from the error', () => {
+    const e = byMessage('card declined');
+    assert.equal(e.level, 'error');
+    assert.equal(e.metadata.name, 'TypeError');
+    assert.match(e.metadata.stack, /TypeError: card declined\n\s+at charge/);
+  });
+
+  check("error('…', { err }): err arrives as name, message, stack and its own fields — not {}", () => {
+    const e = byMessage('Payment failed');
+    assert.equal(e.metadata.orderId, 99);
+    assert.equal(e.metadata.err.name, 'TypeError');
+    assert.equal(e.metadata.err.message, 'card declined');
+    assert.equal(e.metadata.err.code, 'E_CARD');
+    assert.match(e.metadata.err.stack, /at charge/);
+    assert.match(e.metadata.stack, /at charge/, 'its stack is also the log stack, for the Stack Trace view');
+  });
+
+  check('errors deeper in the metadata, and their cause, are sent too', () => {
+    const [err] = byMessage('nested').metadata.result.errors;
+    assert.equal(err.message, 'sync failed');
+    assert.equal(err.cause.name, 'RangeError');
+    assert.equal(err.cause.message, 'page out of range');
+    assert.ok(err.stack);
+    assert.equal(byMessage('nested').metadata.stack, undefined, 'only a top-level error sets the log stack');
+  });
+
+  check('a stack the caller gave is kept', () => {
+    assert.equal(byMessage('explicit stack').metadata.stack, 'my own stack');
+  });
+
+  check('metadata without errors is unchanged', () => {
+    const m = byMessage('plain').metadata;
+    assert.equal(m.a, 1);
+    assert.equal(m.when, '1970-01-01T00:00:00.000Z');
+    assert.deepEqual(m.list, [1, 2]);
+    assert.equal(m.stack, undefined);
+  });
+}
+
 // ── a crashing Node app still crashes ────────────────────────────────────────
 
 /** Run a fixture and report how it ended, whatever the exit code. */

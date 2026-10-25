@@ -6,7 +6,7 @@ import { consoleMethodsOf, setupConsoleCapture } from './console-capture';
 import { getRuntimeContext, refreshContext } from './context';
 import { getSessionId } from '@zharp/internal/session';
 import { normalizeEndpoint } from '@zharp/internal/delivery';
-import { toMessage } from '@zharp/internal/message';
+import { firstError, toMessage, withErrorsAsFields } from '@zharp/internal/message';
 import { announce, describeTarget, disabledByEnv, packageName, pick, readEnv, warn } from '@zharp/internal/env';
 import { ActiveSpan, PublishedConfig, shared } from '@zharp/internal/shared';
 
@@ -424,6 +424,13 @@ export class ZharpLoggerClass {
     const message = toMessage(rawMessage);
     const { environment, appVersion, source } = this.config;
 
+    // An Error carries its own stack; it goes with the log without anyone passing it —
+    // `error(err)` and `error('Payment failed', { err })` alike. A stack the caller gave wins.
+    const error = rawMessage instanceof Error ? rawMessage : firstError(metadata);
+    const fromError = error && !(metadata && 'stack' in metadata)
+      ? { name: error.name, ...(error.stack ? { stack: error.stack } : {}) }
+      : {};
+
     const context = getRuntimeContext(appVersion);
 
     // Stamp the log with the trace it happened inside. This is what turns "an error was logged"
@@ -448,10 +455,11 @@ export class ZharpLoggerClass {
       ...(appVersion ? { version: appVersion } : {}),
       ...(source ? { source } : {}),
       metadata: {
-        // Developer-supplied metadata sits at the top level.
-        // Runtime context goes under a dedicated key so it never
-        // collides with app-specific fields.
-        ...metadata,
+        // Developer-supplied metadata sits at the top level, with any Error in it sent as its
+        // name, message and stack (as JSON it would be `{}`). Runtime context goes under a
+        // dedicated key so it never collides with app-specific fields.
+        ...fromError,
+        ...(withErrorsAsFields(metadata) as Record<string, any> | undefined),
         sessionId: getSessionId(),
         // Also kept here for backends older than the top-level tags.
         ...(environment ? { environment } : {}),

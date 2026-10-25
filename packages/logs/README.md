@@ -81,6 +81,17 @@ ZharpLogger.error('Payment failed', { orderId: 99, reason: 'insufficient_funds' 
 
 `debug` and `fatal` are there too. The object is optional and is kept with the log.
 
+A caught error can be logged as it is — its stack goes with it, nothing to add:
+
+```typescript
+try {
+  await charge(order);
+} catch (err) {
+  ZharpLogger.error(err);                                  // message, name and stack
+  ZharpLogger.error('Payment failed', { err, orderId: 99 }); // or with your own message
+}
+```
+
 ## 5. See your logs
 
 Sign in at [zharp.io](https://zharp.io/login), open **Logs**, and pick your service in the

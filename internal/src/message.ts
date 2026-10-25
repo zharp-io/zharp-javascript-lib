@@ -39,3 +39,53 @@ export function formatArg(value: unknown): string {
   }
   return String(value);
 }
+
+/** An Error as plain fields. `JSON.stringify(err)` is `{}`: name, message and stack are not enumerable. */
+function errorFields(error: Error, seen: WeakSet<object>, depth: number): Record<string, unknown> {
+  const fields: Record<string, unknown> = { name: error.name, message: error.message };
+  if (error.stack) fields.stack = error.stack;
+  // Enumerable extras a library put on it — `code`, `status`, `errno`.
+  for (const [key, value] of Object.entries(error)) fields[key] = withErrorsAsFields(value, seen, depth + 1);
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause !== undefined) fields.cause = withErrorsAsFields(cause, seen, depth + 1);
+  return fields;
+}
+
+/**
+ * Metadata with every Error in it — at any depth — turned into `{ name, message, stack }`, so
+ * `ZharpLogger.error('Payment failed', { err })` sends the error rather than `{}`. Everything
+ * else is left as it is (the same objects, not copies, where nothing inside changed).
+ */
+export function withErrorsAsFields(value: unknown, seen: WeakSet<object> = new WeakSet(), depth = 0): unknown {
+  if (value === null || typeof value !== 'object' || depth > 6) return value;
+  if (seen.has(value)) return value; // a cycle: JSON.stringify decides what to do with it, as before
+  seen.add(value);
+  if (value instanceof Error) return errorFields(value, seen, depth);
+  if (Array.isArray(value)) {
+    let changed = false;
+    const out = value.map((item) => {
+      const next = withErrorsAsFields(item, seen, depth + 1);
+      if (next !== item) changed = true;
+      return next;
+    });
+    return changed ? out : value;
+  }
+  // Only plain objects are walked; a Date, a Map or a class instance keeps its own JSON form.
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  let changed = false;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const next = withErrorsAsFields(item, seen, depth + 1);
+    if (next !== item) changed = true;
+    out[key] = next;
+  }
+  return changed ? out : value;
+}
+
+/** The first Error found at the top level of `metadata`, if any — its stack becomes the log's stack. */
+export function firstError(metadata: Record<string, unknown> | undefined): Error | undefined {
+  if (!metadata) return undefined;
+  for (const value of Object.values(metadata)) if (value instanceof Error) return value;
+  return undefined;
+}
