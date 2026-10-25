@@ -55,11 +55,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/zharp/zharp-js-sdk",
+    "url": "git+https://github.com/zharp-io/zharp-javascript-lib.git",
     "directory": "packages/apm"
   },
   "homepage": "https://zharp.io/docs/sdks/apm",
-  "bugs": "https://github.com/zharp/zharp-js-sdk/issues",
+  "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
   "dependencies": {
     "rrweb": "^2.1.1"
   },
