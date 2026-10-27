@@ -8,7 +8,7 @@
 import { record } from 'rrweb';
 import type { eventWithTime } from '@rrweb/types';
 import { getSessionId } from '@zharp/internal/session';
-import { MAX_BEACON_BYTES, MAX_FETCH_BYTES, normalizeEndpoint, postJson, sendOnUnload, splitBySize } from '@zharp/internal/delivery';
+import { KeyGate, MAX_BEACON_BYTES, MAX_FETCH_BYTES, normalizeEndpoint, postJson, sendOnUnload, splitBySize } from '@zharp/internal/delivery';
 import { shared } from '@zharp/internal/shared';
 import type { ReplayEvent, ReplayOptions } from '../types';
 import { SDK } from '../version';
@@ -67,6 +67,8 @@ export class ReplayRecorder {
 
     private endpoint = '';
     private apiKey = '';
+    /** Stops sending while Zharp rejects the key; see KeyGate. */
+    private readonly gate = new KeyGate('session replays');
     private service = 'unknown';
     /** Sticky: once a session has seen an error it stays flagged, so it can be found later. */
     private sawError = false;
@@ -232,12 +234,16 @@ export class ReplayRecorder {
     }
 
     private async post(batch: ReplayBatch): Promise<'done' | 'retry'> {
+        // While the key is rejected the batch is dropped, not kept: memory stays bounded.
+        if (!this.gate.allow()) return 'done';
         try {
             const response = await postJson(this.endpoint, 'replay', this.apiKey, batch.body, SDK);
+            if (this.gate.record(response.status)) return 'done';
             // Only a server-side failure is retried: a rejected batch will be rejected again, and
             // retrying it forever would block everything recorded after it.
             return !response.ok && response.status >= 500 ? 'retry' : 'done';
         } catch {
+            this.gate.failed();
             return 'retry';
         }
     }
@@ -308,6 +314,10 @@ export class ReplayRecorder {
         // One that is also in flight right now may arrive twice; the backend keeps the first.
         this.cut(MAX_BEACON_BYTES);
         if (!this.pending.length) return;
+        if (this.gate.backedOff) {
+            this.pending = [];
+            return;
+        }
 
         const bodies = this.pending.map((batch) => batch.body);
         this.pending = [];

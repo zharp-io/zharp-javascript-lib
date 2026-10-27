@@ -45,6 +45,10 @@ const server = http.createServer((req, res) => {
     requests.push(record);
 
     let status = 200;
+    // A deleted key, rejected for good; and one rejected only on its first request.
+    const key = req.headers['x-api-key'];
+    if (key === 'rejected-key') status = 401;
+    if (key === 'recovering-key' && requests.filter((r) => r.headers['x-api-key'] === key).length === 1) status = 401;
     if (req.url.startsWith('/api/v1/agent/replay') && req.headers['x-api-key'] === 'replay-flaky') {
       // Slow, so an overlapping flush would show up as two requests in flight.
       replayActive += 1;
@@ -754,6 +758,26 @@ console.log('\nReplay retry (replay-retry.mjs)');
 
   check('only one flush in flight at a time', () => {
     assert.equal(replayMaxActive, 1);
+  });
+}
+
+console.log('\nRejected API key (key-rejected.cjs)');
+{
+  const retry = { ZHARP_TEST_KEY_RETRY_MS: '300' };
+  const rejected = await run('key-rejected.cjs', retry, ['rejected-key']);
+  const sent = (key) => entriesOf(logRequests(key)).map((e) => e.message);
+
+  check('a rejected key warns once, then stops sending; one batch is tried after the wait', () => {
+    assert.deepEqual(sent('rejected-key'), ['first', 'after-wait'], 'while backed off and after the second rejection, nothing is sent');
+    const warnings = lines(rejected.stderr).filter((l) => l.includes('rejected this API key'));
+    assert.deepEqual(warnings, ['[Zharp] Zharp rejected this API key (HTTP 401) — logs are not being sent. Check ZHARP_API_KEY.']);
+    assert.doesNotMatch(rejected.stdout, /accepted the API key again/);
+  });
+
+  const recovering = await run('key-rejected.cjs', retry, ['recovering-key']);
+  check('when the key is accepted again, sending resumes and says so once', () => {
+    assert.deepEqual(sent('recovering-key'), ['first', 'after-wait', 'last']);
+    assert.equal(lines(recovering.stdout).filter((l) => l.includes('accepted the API key again')).length, 1);
   });
 }
 

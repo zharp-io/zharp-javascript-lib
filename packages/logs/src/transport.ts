@@ -1,5 +1,5 @@
 import { LogEntry } from './types';
-import { MAX_BEACON_BYTES, MAX_FETCH_BYTES, postJson, sendOnUnload, splitBySize } from '@zharp/internal/delivery';
+import { KeyGate, MAX_BEACON_BYTES, MAX_FETCH_BYTES, postJson, sendOnUnload, splitBySize } from '@zharp/internal/delivery';
 import { SDK } from './version';
 
 // The body is the entries and nothing else. Older versions also sent `hostname`, `os` and
@@ -10,6 +10,8 @@ const envelope = (logs: LogEntry[]) => ({ logs });
 export class Transport {
   private readonly endpoint: string;
   private readonly apiKey: string;
+  /** Stops sending while Zharp rejects the key; see KeyGate. */
+  private readonly gate = new KeyGate('logs');
 
   constructor(apiKey: string, endpoint: string) {
     this.apiKey = apiKey;
@@ -30,7 +32,7 @@ export class Transport {
   // delivered even when the page is unloading (beforeunload / visibilitychange).
   // sendBeacon is fire-and-forget and cannot be cancelled by the browser.
   sendBeacon(entries: LogEntry[]): void {
-    if (entries.length === 0) return;
+    if (entries.length === 0 || this.gate.backedOff) return;
     if (typeof navigator === 'undefined' || !navigator.sendBeacon) {
       // Fallback: best-effort fetch (may be cancelled on unload)
       this.send(entries).catch(() => {});
@@ -45,14 +47,18 @@ export class Transport {
   // Three attempts in all: the first, then retries after 2s and 4s.
   // Only retry on network errors or 5xx responses — don't retry 4xx
   // because those are client errors that won't be fixed by retrying.
+  // A rejected key (401/403) stops sending altogether for a while: see KeyGate.
   private async sendBody(body: string): Promise<void> {
+    if (!this.gate.allow()) return;
     let attempt = 0;
     while (attempt < 3) {
       try {
         const res = await postJson(this.endpoint, 'logs', this.apiKey, body, SDK);
+        if (this.gate.record(res.status)) return;
         if (res.ok || res.status < 500) return;
       } catch {
         // network failure — fall through to retry
+        this.gate.failed();
       }
       attempt++;
       if (attempt < 3) await sleep(Math.min(1000 * 2 ** attempt, 10000));

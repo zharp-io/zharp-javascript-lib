@@ -10,6 +10,8 @@
  * backend can tell which one sent what.
  */
 
+import { announce, nodeEnv, warn } from './env';
+
 export const DEFAULT_ENDPOINT = 'https://api.zharp.io/api/v1';
 
 /**
@@ -155,5 +157,78 @@ export function sendOnUnload(endpoint: string, type: IngestType, apiKey: string,
     } else {
       plain();
     }
+  }
+}
+
+/** How long a rejected key waits before one batch is tried again. */
+export const KEY_RETRY_MS = 60 * 60 * 1000;
+
+/**
+ * Stops sending when Zharp rejects the API key (401 or 403).
+ *
+ * A deleted or revoked key stays rejected, so sending every batch would only be refused forever.
+ * The first rejection prints one warning; after that nothing is sent — batches are dropped, not
+ * kept, so memory stays bounded — until an hour has passed, when one batch is tried again. If
+ * that one is accepted, sending resumes and says so once; if not, the next try is an hour later.
+ *
+ * Each transport keeps its own gate: logs, traces and replay share a key, but each says what it
+ * has stopped sending.
+ */
+export class KeyGate {
+  /** When the next batch may go out; 0 while the key is accepted. */
+  private retryAt = 0;
+  /** The one batch tried after the wait is in flight. */
+  private probing = false;
+  private readonly retryMs: number;
+
+  constructor(private readonly what: string) {
+    // ZHARP_TEST_KEY_RETRY_MS shortens the hour for the end-to-end tests.
+    this.retryMs = Number(nodeEnv('ZHARP_TEST_KEY_RETRY_MS')) || KEY_RETRY_MS;
+  }
+
+  /** Whether nothing should be sent at all — for unload beacons, which never report back. */
+  get backedOff(): boolean {
+    return this.retryAt !== 0;
+  }
+
+  /** Whether a batch may go out now: always while the key is accepted, then one per wait. */
+  allow(): boolean {
+    if (!this.retryAt) return true;
+    if (this.probing || Date.now() < this.retryAt) return false;
+    this.probing = true;
+    return true;
+  }
+
+  /**
+   * Note a response. Returns true when the key was rejected, so the caller drops the batch
+   * instead of retrying it.
+   */
+  record(status: number): boolean {
+    const wasBackedOff = this.retryAt !== 0;
+    this.probing = false;
+    if (status === 401 || status === 403) {
+      if (!wasBackedOff) {
+        warn(`Zharp rejected this API key (HTTP ${status}) — ${this.what} are not being sent. Check ZHARP_API_KEY.`);
+      }
+      this.retryAt = Date.now() + this.retryMs;
+      return true;
+    }
+    if (wasBackedOff) {
+      if (status >= 200 && status < 300) {
+        this.retryAt = 0;
+        announce(`Zharp accepted the API key again — ${this.what} are being sent.`);
+      } else {
+        // Neither accepted nor rejected (a server error): try again after the next wait.
+        this.retryAt = Date.now() + this.retryMs;
+      }
+    }
+    return false;
+  }
+
+  /** The tried batch never got a response: wait again rather than stay stuck mid-try. */
+  failed(): void {
+    if (!this.probing) return;
+    this.probing = false;
+    this.retryAt = Date.now() + this.retryMs;
   }
 }

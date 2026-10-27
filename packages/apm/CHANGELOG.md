@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.2
+
+- **A rejected API key stops the sending.** When Zharp answers 401 or 403 — a deleted or revoked
+  key — the SDK prints one warning (`Zharp rejected this API key (HTTP 401) — traces are not
+  being sent. Check ZHARP_API_KEY.`) and stops sending instead of having every batch refused.
+  Batches are dropped, not kept, so memory stays bounded. One batch is tried again an hour later;
+  if the key is accepted, sending resumes and says so once.
+
 ## 1.0.1
 
 - **The service name defaults to your app's name.** In Node, with no `service` option, a
