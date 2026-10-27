@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.4
+
+- **A rejected API key stops the sending.** When Zharp answers 401 or 403 — a deleted or revoked
+  key — the SDK prints one warning (`Zharp rejected this API key (HTTP 401) — logs are not
+  being sent. Check ZHARP_API_KEY.`) and stops sending instead of having every batch refused.
+  Batches are dropped, not kept, so memory stays bounded. One batch is tried again an hour later;
+  if the key is accepted, sending resumes and says so once.
+
 ## 1.2.3
 
 - **Caught errors arrive with their stack, with no extra code.** `ZharpLogger.error(err)` sends

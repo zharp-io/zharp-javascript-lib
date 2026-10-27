@@ -1,5 +1,5 @@
 import { SpanRecord } from './types';
-import { MAX_BEACON_BYTES, MAX_FETCH_BYTES, postJson, sendOnUnload, splitBySize } from '@zharp/internal/delivery';
+import { KeyGate, MAX_BEACON_BYTES, MAX_FETCH_BYTES, postJson, sendOnUnload, splitBySize } from '@zharp/internal/delivery';
 import { SDK } from '../version';
 
 // The flat shape the backend reads for SDK spans. Resource attributes travel on each span.
@@ -15,6 +15,8 @@ const envelope = (spans: SpanRecord[]) => ({ spans });
 export class TraceTransport {
   private readonly endpoint: string;
   private readonly apiKey: string;
+  /** Stops sending while Zharp rejects the key; see KeyGate. */
+  private readonly gate = new KeyGate('traces');
 
   constructor(apiKey: string, endpoint: string) {
     this.apiKey = apiKey;
@@ -42,7 +44,7 @@ export class TraceTransport {
    * @param spans - Finished spans to send
    */
   sendBeacon(spans: SpanRecord[]): void {
-    if (!spans.length) return;
+    if (!spans.length || this.gate.backedOff) return;
 
     if (typeof navigator === 'undefined' || !navigator.sendBeacon) {
       this.send(spans).catch(() => {});
@@ -53,14 +55,18 @@ export class TraceTransport {
   }
 
   private async sendBody(body: string): Promise<void> {
+    if (!this.gate.allow()) return;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const response = await postJson(this.endpoint, 'traces', this.apiKey, body, SDK);
         // A 4xx will not be fixed by sending it again — a bad key stays bad, and an oversized
-        // batch stays oversized. Only a server-side failure is worth a second attempt.
+        // batch stays oversized. Only a server-side failure is worth a second attempt. A
+        // rejected key stops sending altogether for a while (KeyGate).
+        if (this.gate.record(response.status)) return;
         if (response.ok || response.status < 500) return;
       } catch {
         // Network failure; fall through and retry once.
+        this.gate.failed();
       }
       if (attempt === 0) await sleep(1000);
     }
