@@ -1,5 +1,13 @@
 # @zharp/logs
 
+> **Legacy — being replaced.** New code should use [`@zharp/node`](https://www.npmjs.com/package/@zharp/node)
+> or [`@zharp/browser`](https://www.npmjs.com/package/@zharp/browser). For logs and errors only, as
+> this package does, turn traces off:
+>
+> ```typescript
+> Zharp.init({ key: 'zpk_…', tracing: false });   // @zharp/node also reads ZHARP_TRACING=false
+> ```
+
 Send your app's logs to [Zharp](https://zharp.io). Uncaught errors and unhandled promise
 rejections are sent automatically; everything else you log yourself, from anywhere in your code.
 Works in Node.js and in the browser.
@@ -199,7 +207,7 @@ export class ZharpNestLogger implements LoggerService {
 ## Tracing and session replay
 
 Use [`@zharp/node`](https://www.npmjs.com/package/@zharp/node) or [`@zharp/browser`](https://www.npmjs.com/package/@zharp/browser),
-which send logs, traces and errors together.
+which send logs, traces and errors together — or logs and errors only, with `tracing: false`.
 
 ## License
 

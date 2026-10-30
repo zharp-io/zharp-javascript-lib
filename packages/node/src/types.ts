@@ -35,6 +35,14 @@ export interface NodeOptions {
    */
   sampleRate?: number;
   /**
+   * Traces. Default **true**. `false` is logs only: logs, errors, user, session and tags are
+   * sent as usual, but no spans are exported, no http/database/framework instrumentation is
+   * installed, and no `traceparent` or `baggage` is added to outgoing requests. An incoming
+   * `traceparent` is still read, so the logs of a request carry the caller's trace id.
+   * `startSpan` just runs its callback. Falls back to `ZHARP_TRACING` (`false` turns it off).
+   */
+  tracing?: boolean;
+  /**
    * Send `console.*` output as logs. Default **true**: on a server, the console is where most
    * logging already goes. pino, winston and bunyan are bridged by their instrumentations
    * whatever this says.

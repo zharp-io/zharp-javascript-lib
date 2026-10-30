@@ -70,6 +70,14 @@ export interface BrowserOptions {
    * matches URLs starting with it; a RegExp is tested against the full URL.
    */
   tracingOrigins?: Array<string | RegExp>;
+  /**
+   * Traces. Default **true**. `false` is logs only: logs, errors, the user, the session and tags
+   * are sent as usual, but no spans are made (no page load, navigation, click or request spans),
+   * `fetch` and `XMLHttpRequest` are not patched, and no `traceparent` or `baggage` header is
+   * added to any request. `startSpan` just runs its callback. Session replay is independent —
+   * it follows `replay` either way; without traces a replay simply has no trace ids linked to it.
+   */
+  tracing?: boolean;
   /** Fraction of traces to keep, 0 to 1. Default 1. Errors, logs and replays are not affected. */
   sampleRate?: number;
   /** Session replay. Off unless a sample rate is set. */

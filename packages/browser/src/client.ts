@@ -37,6 +37,8 @@ interface Running {
   endpoint: Endpoint;
   session: Session;
   tracer: Tracer;
+  /** False in logs-only mode: the tracer then never starts a span, so there is never an active one. */
+  tracing: boolean;
   spans: Exporter<unknown>;
   logs: Exporter<unknown>;
   replay: ReplayController | null;
@@ -132,7 +134,8 @@ export class ZharpBrowser {
     });
     tracer.sampleRate = typeof options.sampleRate === 'number' ? Math.min(1, Math.max(0, options.sampleRate)) : 1;
 
-    const running: Running = { options, endpoint, session, tracer, spans, logs, replay, teardowns: [] };
+    const tracing = options.tracing !== false;
+    const running: Running = { options, endpoint, session, tracer, tracing, spans, logs, replay, teardowns: [] };
     this.running = running;
 
     const ignore = options.ignoreUrls ?? [];
@@ -148,16 +151,18 @@ export class ZharpBrowser {
     };
 
     const t = running.teardowns;
-    t.push(instrumentFetch(httpHooks), instrumentXhr(httpHooks));
+    // Logs only: fetch and XHR are left alone (no spans, no headers), and there are no page
+    // load, navigation or click spans.
+    if (tracing) t.push(instrumentFetch(httpHooks), instrumentXhr(httpHooks));
     t.push(watchErrors((error, mechanism) => this.report(error, false, { 'zharp.mechanism': mechanism })));
     t.push(watchActivity(() => session.touch()));
     t.push(
       watchNavigation((route) => {
         session.touch();
-        tracer.startRoot('navigation', route, { 'url.full': location.href });
+        if (tracing) tracer.startRoot('navigation', route, { 'url.full': location.href });
       }),
     );
-    if (options.interactions !== false) t.push(watchClicks((label, selector) => tracer.noteClick(label, selector)));
+    if (tracing && options.interactions !== false) t.push(watchClicks((label, selector) => tracer.noteClick(label, selector)));
     if (options.captureConsole) {
       const methods: ConsoleMethod[] = options.captureConsole === true ? ['debug', 'log', 'info', 'warn', 'error'] : options.captureConsole;
       t.push(watchConsole(methods, (level, message) => this.emit(level, message, { 'log.source': 'console' })));
@@ -173,7 +178,7 @@ export class ZharpBrowser {
 
     // Replay first, so it hears about the page load's trace while the recorder downloads.
     replay?.start();
-    this.startPageLoad(tracer);
+    if (tracing) this.startPageLoad(tracer);
   }
 
   /** The page load span: from navigation start until the load event, its requests, and a quiet second. */
@@ -229,7 +234,7 @@ export class ZharpBrowser {
   startSpan<T>(name: string, fn: (span: ZharpSpan) => T, attributes?: Attributes): T {
     const running = this.running;
     let span: Span | undefined;
-    if (running) span = safely(() => running.tracer.startSpan(name, Kind.Internal));
+    if (running?.tracing) span = safely(() => running.tracer.startSpan(name, Kind.Internal));
     if (!running || !span) return fn(noopSpan);
     const s = span;
     if (attributes) s.setAttributes(attributes);

@@ -71,6 +71,14 @@ Listening for `uncaughtException` / `unhandledRejection` stops Node from exiting
 
 What is waiting is sent when the event loop empties, and on SIGTERM/SIGINT (after which the signal is raised again if nothing else is listening for it). In serverless functions, `await Zharp.flush()` before returning.
 
+### Logs only
+
+```typescript
+Zharp.init({ tracing: false });   // or ZHARP_TRACING=false
+```
+
+Logs (`Zharp.log.*`, the console, pino, winston, bunyan), errors (with `exception.*` and the handled flag), the user, the session and tags are sent as usual. No spans are exported, nothing is instrumented except the log bridges and the incoming side of `http`, and no `traceparent` or `baggage` is added to outgoing requests. An incoming `traceparent` and `baggage` are still read, so a request's logs carry the caller's trace id, session and user (and `setUser()` inside a request stays with that request) — at the cost of one never-exported in-memory span per request. `Zharp.startSpan(name, fn)` just runs `fn`.
+
 ## API
 
 | | |
@@ -96,6 +104,7 @@ Everything else is plain OpenTelemetry: `trace.getActiveSpan()`, `trace.getTrace
 | `environment` | `ZHARP_ENV`, `NODE_ENV` | `deployment.environment.name` |
 | `release` | `ZHARP_RELEASE` | `service.version` |
 | `endpoint` | `https://api.zharp.io/api/v1/otlp` | |
+| `tracing` | `ZHARP_TRACING`, else `true` | `false` for logs only (see above). |
 | `sampleRate` | `1` | Fraction of new traces kept. A trace that arrives with a decision (from the browser) keeps it. Errors and logs are always sent. |
 | `captureConsole` | `true` | |
 | `captureUncaught` | `true` | |

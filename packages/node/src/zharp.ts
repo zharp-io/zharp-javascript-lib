@@ -9,21 +9,33 @@
  */
 import { register as registerLoader } from 'node:module';
 import {
+  type Context,
   type DiagLogger,
   DiagLogLevel,
   diag,
+  INVALID_SPAN_CONTEXT,
   logs,
   SeverityNumber,
   SpanStatusCode,
   trace,
   type Logger,
+  type TextMapGetter,
+  type TextMapPropagator,
   type Span,
   type SpanOptions,
 } from '@opentelemetry/api';
 import { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } from '@opentelemetry/core';
 import { envDetector, hostDetector, resourceFromAttributes } from '@opentelemetry/resources';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler, type SpanProcessor } from '@opentelemetry/sdk-trace';
+import {
+  BatchSpanProcessor,
+  ParentBasedSampler,
+  SamplingDecision,
+  TraceIdRatioBasedSampler,
+  type Sampler,
+  type SamplingResult,
+  type SpanProcessor,
+} from '@opentelemetry/sdk-trace';
 import { BatchLogRecordProcessor, type LogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-proto';
@@ -49,6 +61,8 @@ export class ZharpNode {
   private logger: Logger | null = null;
   private readonly store = new ContextStore();
   private teardowns: Array<() => void> = [];
+  /** False in logs-only mode (`tracing: false` / `ZHARP_TRACING=false`). */
+  private tracing = true;
   /** Errors already sent, so one that is both rejected and then thrown is reported once. */
   private readonly reported = new WeakSet<object>();
 
@@ -98,6 +112,8 @@ export class ZharpNode {
     const environment = pick(options.environment, nodeEnv('ZHARP_ENV'), nodeEnv('NODE_ENV'));
     const release = pick(options.release, nodeEnv('ZHARP_RELEASE'), nodeEnv('ZHARP_VERSION'));
     const endpoint = (pick(options.endpoint, nodeEnv('ZHARP_ENDPOINT')) ?? DEFAULT_ENDPOINT).replace(/\/+$/, '');
+    const tracing = tracingEnabled(options.tracing);
+    this.tracing = tracing;
 
     if (options.debug) {
       // Bound to the console as it is now, before the bridge patches it: OpenTelemetry's own
@@ -115,10 +131,14 @@ export class ZharpNode {
 
     const headers = { Authorization: `Bearer ${key}` };
     const exporterOptions = { headers, compression: 'gzip' as any };
-    this.spanProcessors = [
-      new ContextSpanProcessor(this.store),
-      new BatchSpanProcessor({ exporter: new OTLPTraceExporter({ ...exporterOptions, url: `${endpoint}/v1/traces` }) }),
-    ];
+    // Logs only: no span exporter at all. The context processor stays, because it is what keeps
+    // a user set with setUser() to its own request (see RecordOnlySampler).
+    this.spanProcessors = tracing
+      ? [
+          new ContextSpanProcessor(this.store),
+          new BatchSpanProcessor({ exporter: new OTLPTraceExporter({ ...exporterOptions, url: `${endpoint}/v1/traces` }) }),
+        ]
+      : [new ContextSpanProcessor(this.store)];
     this.logProcessors = [
       new ContextLogProcessor(this.store),
       new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ ...exporterOptions, url: `${endpoint}/v1/logs` }) }),
@@ -135,6 +155,9 @@ export class ZharpNode {
       'process.runtime.version': process.versions.node,
     });
 
+    const propagator = new CompositePropagator({
+      propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
+    });
     const rate = typeof options.sampleRate === 'number' ? Math.min(1, Math.max(0, options.sampleRate)) : 1;
 
     this.sdk = new NodeSDK({
@@ -142,22 +165,22 @@ export class ZharpNode {
       // Host and OTEL_RESOURCE_ATTRIBUTES only. The process detector would send the command line,
       // which is where secrets passed as arguments live.
       resourceDetectors: [envDetector, hostDetector],
-      sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(rate) }),
-      textMapPropagator: new CompositePropagator({
-        propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
-      }),
+      sampler: tracing ? new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(rate) }) : new RecordOnlySampler(),
+      textMapPropagator: tracing ? propagator : new ExtractOnlyPropagator(propagator),
       spanProcessors: this.spanProcessors,
       logRecordProcessors: this.logProcessors,
       // Without this the SDK would start an OTLP metrics exporter pointed at localhost:4318.
       metricReaders: [],
       instrumentations: [
-        getNodeAutoInstrumentations({
-          // A span per DNS lookup, socket and file read buries the requests that matter.
-          '@opentelemetry/instrumentation-dns': { enabled: false },
-          '@opentelemetry/instrumentation-net': { enabled: false },
-          '@opentelemetry/instrumentation-fs': { enabled: false },
-          ...options.instrumentations,
-        }),
+        ...(tracing
+          ? getNodeAutoInstrumentations({
+              // A span per DNS lookup, socket and file read buries the requests that matter.
+              '@opentelemetry/instrumentation-dns': { enabled: false },
+              '@opentelemetry/instrumentation-net': { enabled: false },
+              '@opentelemetry/instrumentation-fs': { enabled: false },
+              ...options.instrumentations,
+            })
+          : logsOnlyInstrumentations(options)),
         ...(options.extraInstrumentations ?? []),
       ],
     });
@@ -168,7 +191,7 @@ export class ZharpNode {
     if (options.captureUncaught !== false) this.teardowns.push(this.captureProcessErrors());
     this.teardowns.push(this.flushOnExit());
 
-    announce(`Application monitoring active — ${describeTarget(service, environment)}`);
+    announce(`Application monitoring active${tracing ? '' : ' (logs only)'} — ${describeTarget(service, environment)}`);
   }
 
   /**
@@ -212,6 +235,9 @@ export class ZharpNode {
    * throw or rejection marks the span as failed and is passed on unchanged.
    */
   startSpan<T>(name: string, fn: (span: Span) => T, options: SpanOptions = {}): T {
+    // Logs only: no span — the callback runs as it is, handed a non-recording stand-in with the
+    // current trace's ids (so ending or annotating it touches nothing).
+    if (!this.tracing) return fn(trace.wrapSpanContext(trace.getActiveSpan()?.spanContext() ?? INVALID_SPAN_CONTEXT));
     const tracer = trace.getTracer('@zharp/node', VERSION);
     return tracer.startActiveSpan(name, options, (span) => {
       const fail = (error: unknown) => {
@@ -414,5 +440,72 @@ function registerEsmHook(): void {
     registerLoader?.('@opentelemetry/instrumentation/hook.mjs', import.meta.url);
   } catch {
     // Older Node without module.register: CommonJS is still instrumented.
+  }
+}
+
+/**
+ * `tracing` from the option, else `ZHARP_TRACING` (`false`, `0`, `no`, `off` turn it off).
+ * On unless one of them says otherwise.
+ */
+function tracingEnabled(option: boolean | undefined): boolean {
+  if (typeof option === 'boolean') return option;
+  const value = nodeEnv('ZHARP_TRACING');
+  return !(value && /^(false|0|no|off)$/i.test(value));
+}
+
+/**
+ * Logs only: the log bridges (pino, winston, bunyan) and the http *server* instrumentation —
+ * nothing else. The http server side is there only to give each incoming request a context: it
+ * reads the caller's `traceparent` and `baggage`, so the request's logs carry the caller's trace
+ * id, session and user (and a fresh trace id of their own when the caller sent none). Its one
+ * span per request is never exported. Outgoing requests are not patched at all, and nothing is
+ * injected into them.
+ */
+function logsOnlyInstrumentations(options: NodeOptions) {
+  // getNodeAutoInstrumentations has no "only these" option, but it honours this variable — set
+  // for the duration of the call alone.
+  const previous = process.env.OTEL_NODE_ENABLED_INSTRUMENTATIONS;
+  process.env.OTEL_NODE_ENABLED_INSTRUMENTATIONS = 'http,pino,winston,bunyan';
+  try {
+    return getNodeAutoInstrumentations({
+      ...options.instrumentations,
+      '@opentelemetry/instrumentation-http': {
+        ...options.instrumentations?.['@opentelemetry/instrumentation-http'],
+        disableOutgoingRequestInstrumentation: true,
+      },
+    });
+  } finally {
+    if (previous === undefined) delete process.env.OTEL_NODE_ENABLED_INSTRUMENTATIONS;
+    else process.env.OTEL_NODE_ENABLED_INSTRUMENTATIONS = previous;
+  }
+}
+
+/**
+ * Logs only: every span is recorded (so the context processor sees it start and end, which is
+ * what scopes setUser() to a request) and none is sampled (so nothing could export it, and the
+ * flags say so). Spans live in memory for the length of the request and are then dropped.
+ */
+class RecordOnlySampler implements Sampler {
+  shouldSample(): SamplingResult {
+    return { decision: SamplingDecision.RECORD };
+  }
+
+  toString(): string {
+    return 'ZharpRecordOnlySampler';
+  }
+}
+
+/** Reads `traceparent` and `baggage` from incoming requests; never writes them anywhere. */
+class ExtractOnlyPropagator implements TextMapPropagator {
+  constructor(private readonly inner: TextMapPropagator) {}
+
+  inject(): void {}
+
+  extract(context: Context, carrier: unknown, getter: TextMapGetter): Context {
+    return this.inner.extract(context, carrier, getter);
+  }
+
+  fields(): string[] {
+    return [];
   }
 }

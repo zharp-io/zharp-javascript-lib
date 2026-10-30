@@ -269,6 +269,43 @@ console.log('\n@zharp/browser: script tag (browser-cdn.mjs) and a rejected key (
   });
 }
 
+console.log('\n@zharp/browser: tracing: false (browser-logs-only.mjs)');
+{
+  const { result, err } = await run(['test/unified/browser-logs-only.mjs']);
+  assert.ok(result, err);
+  const logs = logsOf('browser-logs-only');
+  check('no spans are made or sent', () => {
+    assert.equal(byKey('browser-logs-only', '/v1/traces').length, 0);
+  });
+  check('fetch and XHR are left alone: no traceparent or baggage, even same-origin and tracingOrigins', () => {
+    assert.equal(result.fetchPatched, false);
+    assert.ok(result.appRequests.length >= 2);
+    for (const r of result.appRequests) assert.deepEqual([r.traceparent, r.baggage], [null, null], r.url);
+    assert.ok(!result.xhrHeaders.some(([n]) => n === 'traceparent' || n === 'baggage'));
+  });
+  check('logs go out with session, user and tags, and no trace id', () => {
+    const hello = logs.find((l) => l.body.stringValue === 'logs only hello');
+    assert.ok(hello);
+    assert.equal(hello.attrs.orderId, 8);
+    assert.equal(hello.attrs['session.id'], result.sessionId);
+    assert.equal(hello.attrs['enduser.id'], 'user 2');
+    assert.equal(hello.attrs.plan, 'pro');
+    assert.ok(!hello.traceId);
+  });
+  check('captureError and uncaught errors: exception.* and the handled flag', () => {
+    const captured = logs.find((l) => l.attrs['exception.message'] === 'captured without tracing');
+    assert.equal(captured.attrs['exception.type'], 'RangeError');
+    assert.equal(captured.attrs['zharp.handled'], 'true');
+    const uncaught = logs.find((l) => l.attrs['exception.message'] === 'uncaught without tracing');
+    assert.equal(uncaught.attrs['zharp.handled'], 'false');
+  });
+  check('startSpan runs the callback and returns its value; a log inside has no span', () => {
+    assert.equal(result.spanResult, 'ran:function');
+    const inside = logs.find((l) => l.body.stringValue === 'inside manual, no span');
+    assert.ok(inside && !inside.spanId);
+  });
+}
+
 // ── @zharp/node ──────────────────────────────────────────────────────────────
 
 const nodeArgs = (file, ...args) => ['--import', './test/unified/node-instrument.mjs', `./test/unified/${file}`, ...args];
@@ -333,6 +370,37 @@ console.log('\n@zharp/node: no key');
   check('prints how to fix it, starts nothing, sends nothing', () => {
     assert.match(nokey.err, /\[Zharp\] No key found/);
     assert.equal(requests.length, before);
+  });
+}
+
+console.log('\n@zharp/node: ZHARP_TRACING=false (node-logs-only.mjs)');
+{
+  const app = await run(nodeArgs('node-logs-only.mjs'), { TEST_KEY: 'node-logs-only', ZHARP_TRACING: 'false' });
+  assert.ok(app.result, app.err);
+  const logs = text('node-logs-only', '/v1/logs');
+  check('activation line says logs only', () => {
+    assert.match(app.out, /\[Zharp\] Application monitoring active \(logs only\)/);
+  });
+  check('no spans are sent', () => {
+    assert.equal(byKey('node-logs-only', '/v1/traces').length, 0);
+  });
+  check('nothing is propagated to outgoing http.get or fetch', () => {
+    assert.equal(app.result.downstreamHeaders.length, 4);
+    for (const h of app.result.downstreamHeaders) assert.deepEqual(h, { traceparent: null, baggage: null });
+  });
+  check('Zharp.log, console and captureError are sent, with exception.* and the handled flag', () => {
+    for (const s of ['logs only from the browser', 'logs only console', 'logs only caught', 'exception.stacktrace', 'zharp.handled', 'inside job, logs only']) assert.ok(logs.includes(s), s);
+  });
+  check("logs in a request carry the incoming traceparent's trace id, and session/user from baggage", () => {
+    const traceId = Buffer.from('4bf92f3577b34da6a3ce929d0e0e4736', 'hex');
+    assert.ok(byKey('node-logs-only', '/v1/logs').some((r) => r.raw.includes(traceId)));
+    assert.ok(logs.includes('logs-only-session') && logs.includes('user 3'));
+  });
+  check('setUser inside a request stays with that request', () => {
+    assert.equal(logs.split('logs-only-user').length - 1, 1);
+  });
+  check('startSpan runs the callback and returns its value', () => {
+    assert.equal(app.result.spanResult, 42);
   });
 }
 

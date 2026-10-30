@@ -79,6 +79,14 @@ Zharp.log.error('Payment failed', { error });          // an Error here is sent 
 
 The console is not copied by default — on most pages it is mostly other people's libraries. `captureConsole: true` copies every level, `captureConsole: ['warn', 'error']` just those.
 
+### Logs only
+
+```typescript
+Zharp.init({ key: 'zpk_…', tracing: false });
+```
+
+Logs, errors (uncaught and `captureError`, with their stacks), the user, the session and tags are sent as usual; no spans are made, `fetch` and `XMLHttpRequest` are not patched, and no `traceparent` or `baggage` header is added to any request. `Zharp.startSpan(name, fn)` just runs `fn`. Session replay is independent of it: it still follows `replay`, but a recording has no traces to link to.
+
 ## API
 
 | | |
@@ -104,6 +112,7 @@ The console is not copied by default — on most pages it is mostly other people
 | `release` | — | `service.version`. Use the same value as your source maps' release. |
 | `endpoint` | `https://api.zharp.io/api/v1/otlp` | |
 | `tracingOrigins` | `[]` | See above. Same-origin requests are always included. |
+| `tracing` | `true` | `false` for logs only (see above). |
 | `sampleRate` | `1` | Fraction of traces kept. Errors, logs and replays are not sampled by it; the decision travels in `traceparent`, so the back end keeps or drops the same traces. |
 | `replay` | off | See above. |
 | `captureConsole` | `false` | `true` or a list of levels. |

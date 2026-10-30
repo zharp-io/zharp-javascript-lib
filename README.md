@@ -14,7 +14,9 @@ npm install @zharp/node      # in the server
 
 Both send OpenTelemetry (OTLP) to the same endpoint with the app's key. A request from a page to your API carries `traceparent` and `baggage`, so the page's spans and the server's are one trace, and the server's logs and errors are filed under the user and session that caused them.
 
-`@zharp/logs` is the previous generation of logging and will be deprecated.
+For logs and errors without traces, pass `tracing: false` to either (or set `ZHARP_TRACING=false` for `@zharp/node`).
+
+`@zharp/logs` is the previous generation of logging, kept only until `@zharp/node` is published; it is being replaced by `@zharp/node` / `@zharp/browser` with `tracing: false`.
 
 ---
 
