@@ -1,0 +1,56 @@
+{
+  "name": "@zharp/webpack-plugin",
+  "version": "0.1.0",
+  "description": "Zharp webpack plugin: inject debug IDs and upload source maps on production builds",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build && pnpm run typecheck"
+  },
+  "keywords": [
+    "zharp",
+    "sourcemaps",
+    "debug-id",
+    "error-tracking",
+    "webpack",
+    "webpack-plugin"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zharp-io/zharp-javascript-lib.git",
+    "directory": "packages/bundler-plugins/webpack"
+  },
+  "homepage": "https://zharp.io/docs/sourcemaps",
+  "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "dependencies": {
+    "@zharp/cli": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}

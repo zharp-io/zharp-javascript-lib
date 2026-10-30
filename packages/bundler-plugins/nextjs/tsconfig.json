@@ -1,0 +1,22 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "paths": {
+      "@zharp/cli": [
+        "../../cli/src/index.ts"
+      ],
+      "@zharp/webpack-plugin": [
+        "../webpack/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ]
+}

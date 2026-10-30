@@ -1,18 +1,26 @@
 {
   "name": "zharp-js-sdk",
   "private": true,
-  "description": "Zharp's JavaScript SDKs: @zharp/browser and @zharp/node (and the older @zharp/logs)",
+  "description": "Zharp's JavaScript SDKs: @zharp/browser and @zharp/node (and the older @zharp/logs), @zharp/cli and the bundler plugins",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r build && node test/run.mjs && node test/unified.mjs",
+    "test": "pnpm -r build && node test/run.mjs && node test/unified.mjs && node test/readable-stacks.mjs",
     "test:e2e": "node test/e2e/run.mjs"
   },
   "devDependencies": {
     "@zharp/browser": "workspace:*",
+    "@zharp/cli": "workspace:*",
+    "@zharp/esbuild-plugin": "workspace:*",
     "@zharp/logs": "workspace:*",
+    "@zharp/nextjs": "workspace:*",
     "@zharp/node": "workspace:*",
-    "jsdom": "^24.1.3"
+    "@zharp/rollup-plugin": "workspace:*",
+    "@zharp/vite-plugin": "workspace:*",
+    "@zharp/webpack-plugin": "workspace:*",
+    "esbuild": "^0.27.7",
+    "jsdom": "^24.1.3",
+    "rollup": "^4.66.0"
   },
   "packageManager": "pnpm@10.17.1"
 }
