@@ -1,7 +1,7 @@
 {
   "name": "zharp-js-sdk",
   "private": true,
-  "description": "Zharp's JavaScript SDKs: @zharp/browser and @zharp/node (and the older @zharp/logs and @zharp/apm)",
+  "description": "Zharp's JavaScript SDKs: @zharp/browser and @zharp/node (and the older @zharp/logs)",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
@@ -9,7 +9,6 @@
     "test:e2e": "node test/e2e/run.mjs"
   },
   "devDependencies": {
-    "@zharp/apm": "workspace:*",
     "@zharp/browser": "workspace:*",
     "@zharp/logs": "workspace:*",
     "@zharp/node": "workspace:*",

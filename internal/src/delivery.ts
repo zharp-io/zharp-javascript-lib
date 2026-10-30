@@ -1,13 +1,6 @@
 /**
- * What every transport shares: the version it reports, where it sends, and how a body is cut
- * to a size the network will accept.
- *
- * Logs, traces and replay each have their own transport because they fail differently, but
- * they must agree on these. This folder is bundled into both @zharp/logs and @zharp/apm, so
- * the two packages send in exactly the same way without either depending on the other.
- *
- * Each package passes its own `X-Zharp-SDK` value (`js-logs/1.1.0`, `js-apm/1.0.0`), so the
- * backend can tell which one sent what.
+ * How @zharp/logs delivers to the /agent endpoints: where it sends, and how a body is cut to a
+ * size the network will accept. It reports itself in `X-Zharp-SDK` (`js-logs/1.1.0`).
  */
 
 import { announce, nodeEnv, warn } from './env';
@@ -27,7 +20,7 @@ export const MAX_FETCH_BYTES = 1_000_000;
  */
 export const MAX_BEACON_BYTES = 60_000;
 
-export type IngestType = 'logs' | 'traces' | 'replay';
+export type IngestType = 'logs';
 
 /** Trim a configured endpoint so paths can be appended to it. */
 export function normalizeEndpoint(endpoint?: string): string {
@@ -170,9 +163,6 @@ export const KEY_RETRY_MS = 60 * 60 * 1000;
  * The first rejection prints one warning; after that nothing is sent — batches are dropped, not
  * kept, so memory stays bounded — until an hour has passed, when one batch is tried again. If
  * that one is accepted, sending resumes and says so once; if not, the next try is an hour later.
- *
- * Each transport keeps its own gate: logs, traces and replay share a key, but each says what it
- * has stopped sending.
  */
 export class KeyGate {
   /** When the next batch may go out; 0 while the key is accepted. */

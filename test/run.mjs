@@ -2,10 +2,10 @@
  * End-to-end checks against the built packages (run `pnpm -r build` first; `pnpm test` does).
  *
  * A local HTTP server stands in for the Zharp backend and records every request. Each scenario
- * runs in its own Node process, as a real consumer would, loading `@zharp/logs` and `@zharp/apm`
+ * runs in its own Node process, as a real consumer would, loading `@zharp/logs`
  * by package name through the workspace links: the ESM builds imported from native .mjs files,
  * the CJS builds required from .cjs files, the `/init` entries preloaded with `--require` and
- * `--import`, a fake browser for the unload path, and jsdom for session replay. The parent never
+ * `--import`, and a fake browser for the unload path. The parent never
  * loads the SDK, so its server is not traced.
  *
  *     node test/run.mjs
@@ -21,16 +21,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 const version = (pkg) => JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8')).version;
 const LOGS_SDK = `js-logs/${version('logs')}`;
-const APM_SDK = `js-apm/${version('apm')}`;
 const FETCH_LIMIT = 1_000_000;
 const BEACON_LIMIT = 60_000;
 
 // ── fake backend ─────────────────────────────────────────────────────────────
 
 const requests = [];
-const replayAttempts = new Map();
-let replayActive = 0;
-let replayMaxActive = 0;
 
 const server = http.createServer((req, res) => {
   let raw = '';
@@ -49,17 +45,6 @@ const server = http.createServer((req, res) => {
     const key = req.headers['x-api-key'];
     if (key === 'rejected-key') status = 401;
     if (key === 'recovering-key' && requests.filter((r) => r.headers['x-api-key'] === key).length === 1) status = 401;
-    if (req.url.startsWith('/api/v1/agent/replay') && req.headers['x-api-key'] === 'replay-flaky') {
-      // Slow, so an overlapping flush would show up as two requests in flight.
-      replayActive += 1;
-      replayMaxActive = Math.max(replayMaxActive, replayActive);
-      const seq = body?.sequence;
-      const attempt = (replayAttempts.get(seq) ?? 0) + 1;
-      replayAttempts.set(seq, attempt);
-      if ((seq === 0 && attempt === 1) || seq === 1) status = 500;
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      replayActive -= 1;
-    }
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end('{}');
   });
@@ -118,46 +103,34 @@ const keyOf = (r) => r.headers['x-api-key'] ?? decodeURIComponent(r.url.split('/
 const ofType = (type, key) =>
   requests.filter((r) => r.url.startsWith(`/api/v1/agent/${type}`) && (key === undefined || keyOf(r) === key));
 const logRequests = (key) => ofType('logs', key);
-const traceRequests = (key) => ofType('traces', key);
 const entriesOf = (reqs) => reqs.flatMap((r) => r.body?.logs ?? []);
-const spansOf = (reqs) => reqs.flatMap((r) => r.body?.spans ?? []);
 const lines = (text) => text.split(/\r?\n/).filter((l) => l.startsWith('[Zharp]'));
 
-// ── Node: ESM and CJS, both packages ─────────────────────────────────────────
+// ── Node: ESM and CJS builds ─────────────────────────────────────────
 
 for (const [label, file] of [['esm', 'node-consumer.mjs'], ['cjs', 'node-consumer.cjs']]) {
   console.log(`\n${label.toUpperCase()} consumer (${file})`);
-  const { result, stdout } = await run(file, { NODE_ENV: 'production' });
+  const { stdout } = await run(file, { NODE_ENV: 'production' });
   const service = `${label}-app`;
 
   const logs = logRequests().filter((r) => entriesOf([r]).some((e) => e.service === service));
-  const traces = traceRequests().filter((r) => spansOf([r]).some((s) => s.serviceName === service));
   const entries = entriesOf(logs);
-  const spans = spansOf(traces);
 
-  check('one activation line per package', () => {
-    assert.deepEqual(lines(stdout), [
-      `[Zharp] Logging active — service "${service}", environment "staging"`,
-      `[Zharp] APM active — service "${service}", environment "staging"`,
-    ]);
+  check('one activation line', () => {
+    assert.deepEqual(lines(stdout), [`[Zharp] Logging active — service "${service}", environment "staging"`]);
   });
 
-  check('requests go to the key-less path with X-API-KEY and each package\'s X-Zharp-SDK', () => {
-    assert.ok(logs.length && traces.length, 'expected log and trace requests');
-    for (const r of [...logs, ...traces]) {
-      assert.match(r.url, /^\/api\/v1\/agent\/(logs|traces)$/, r.url);
+  check('requests go to the key-less path with X-API-KEY and X-Zharp-SDK', () => {
+    assert.ok(logs.length, 'expected log requests');
+    for (const r of logs) {
+      assert.equal(r.url, '/api/v1/agent/logs');
       assert.equal(r.headers['x-api-key'], 'test-key-123');
+      assert.equal(r.headers['x-zharp-sdk'], LOGS_SDK);
     }
-    for (const r of logs) assert.equal(r.headers['x-zharp-sdk'], LOGS_SDK);
-    for (const r of traces) assert.equal(r.headers['x-zharp-sdk'], APM_SDK);
   });
 
   check('log body is { logs } only — no hostname/os/version', () => {
     for (const r of logs) assert.deepEqual(Object.keys(r.body), ['logs']);
-  });
-
-  check('trace body is flat { spans }', () => {
-    for (const r of traces) assert.deepEqual(Object.keys(r.body), ['spans']);
   });
 
   check('every entry has top-level environment/version/source and metadata.environment', () => {
@@ -182,61 +155,6 @@ for (const [label, file] of [['esm', 'node-consumer.mjs'], ['cjs', 'node-consume
     for (const r of logs) assert.ok(r.bytes <= FETCH_LIMIT, `${r.bytes} bytes`);
     assert.equal(entries.filter((e) => e.message.startsWith('big-')).length, 30, 'no entry lost in the split');
   });
-
-  check('SERVER spans are produced for incoming requests', () => {
-    const serverA = spans.find((s) => s.kind === 'SERVER' && s.name === 'GET /a');
-    const serverB = spans.find((s) => s.kind === 'SERVER' && s.name === 'GET /b');
-    assert.ok(serverA && serverB, `spans: ${spans.map((s) => `${s.kind} ${s.name}`).join(', ')}`);
-    const clientA = spans.find((s) => s.kind === 'CLIENT' && s.name === 'GET /a');
-    assert.ok(clientA, 'client span for the outgoing http.get');
-    assert.equal(serverA.parentSpanId, clientA.spanId, 'traceparent propagated client -> server');
-  });
-
-  check('context survives await and does not leak between concurrent requests', () => {
-    const { a, b } = result;
-    assert.ok(a.before, 'a trace is active inside the handler');
-    assert.equal(a.before, a.after);
-    assert.equal(b.before, b.after);
-    assert.notEqual(a.before, b.before);
-    const serverA = spans.find((s) => s.kind === 'SERVER' && s.name === 'GET /a');
-    assert.equal(a.before, serverA.traceId);
-    const log = entries.find((e) => e.message === 'inside request /a');
-    assert.equal(log.metadata.traceId, serverA.traceId, 'log carries the request trace after await');
-  });
-
-  check('span resource carries environment, version and source (taken from the logger)', () => {
-    for (const s of spans) {
-      assert.equal(s.resource['deployment.environment.name'], 'staging');
-      assert.equal(s.resource['deployment.environment'], 'staging');
-      assert.equal(s.resource['service.version'], '2.0.0');
-      assert.equal(s.resource['zharp.source'], 'worker');
-    }
-  });
-
-  check('continueTrace(tp, fn, name) runs fn in a CONSUMER span', () => {
-    const job = spans.find((s) => s.name === 'process-job');
-    assert.ok(job, 'process-job span');
-    assert.equal(job.kind, 'CONSUMER');
-    assert.equal(job.traceId, 'a'.repeat(32));
-    assert.equal(job.parentSpanId, 'b'.repeat(16));
-    assert.equal(result.inner, 'a'.repeat(32));
-    const asyncJob = spans.find((s) => s.name === 'async-job');
-    assert.equal(asyncJob?.kind, 'CONSUMER');
-    const log = entries.find((e) => e.message === 'in async job');
-    assert.equal(log.metadata.traceId, 'e'.repeat(32));
-    assert.equal(log.metadata.spanId, asyncJob.spanId, 'log inside the job is attached to its span');
-  });
-
-  check('continueTrace(tp, fn) without a name creates no span', () => {
-    assert.equal(result.plain, 'c'.repeat(32));
-    assert.ok(!spans.some((s) => s.traceId === 'c'.repeat(32)));
-  });
-
-  if (label === 'esm') {
-    check('a named `get` import from node:http is traced too', () => {
-      assert.ok(spans.some((s) => s.kind === 'CLIENT' && s.name === 'GET /named'), spans.map((s) => `${s.kind} ${s.name}`).join(', '));
-    });
-  }
 }
 
 // ── @zharp/logs: init() from the environment ─────────────────────────────────
@@ -345,21 +263,15 @@ console.log('\nRe-init replaces (reinit.cjs)');
 {
   const { result, stdout } = await run('reinit.cjs');
 
-  check('second init() is not refused: two activation lines per package', () => {
+  check('second init() is not refused: two activation lines', () => {
     assert.deepEqual(lines(stdout), [
       '[Zharp] Logging active — service "reinit-a", no environment set',
-      '[Zharp] APM active — service "reinit-a", no environment set',
       '[Zharp] Logging active — service "reinit-b", no environment set',
-      '[Zharp] APM active — service "reinit-b", no environment set',
     ]);
   });
   check('logs queued before re-init go out under the old key; later ones under the new', () => {
     assert.deepEqual(entriesOf(logRequests('reinit-a')).map((e) => `${e.service}:${e.message}`), ['reinit-a:reinit before']);
     assert.deepEqual(entriesOf(logRequests('reinit-b')).map((e) => `${e.service}:${e.message}`), ['reinit-b:reinit after']);
-  });
-  check('spans likewise', () => {
-    assert.deepEqual(spansOf(traceRequests('reinit-a')).map((s) => `${s.serviceName}:${s.name}`), ['reinit-a:span-a']);
-    assert.deepEqual(spansOf(traceRequests('reinit-b')).map((s) => `${s.serviceName}:${s.name}`), ['reinit-b:span-b']);
   });
   check('handlers are replaced, not added to; destroy() removes them all', () => {
     assert.deepEqual(result.afterSecond, result.afterFirst);
@@ -391,100 +303,6 @@ console.log('\nPreloading the init entries');
     });
   }
 
-  const apmCases = [
-    ['--require @zharp/apm/init', 'preload-apm.cjs', 'apm-cjs'],
-    ['--import @zharp/apm/init', 'preload-apm.mjs', 'apm-esm'],
-  ];
-  for (const [flag, file, tag] of apmCases) {
-    const { result, stdout } = await run(file, env(`preload-${tag}`), [tag], flag.split(' '));
-    check(`node ${flag} ${file}: http is traced with no code in the app`, () => {
-      assert.equal(result.active, true);
-      assert.deepEqual(lines(stdout), [`[Zharp] APM active — service "preload-${tag}", environment "preload-env"`]);
-      const spans = spansOf(traceRequests('preload-key')).filter((s) => s.serviceName === `preload-${tag}`);
-      const names = spans.map((s) => `${s.kind} ${s.name}`);
-      assert.ok(names.includes(`SERVER GET /preloaded-${tag}`), names.join(', '));
-      assert.ok(names.includes(`CLIENT GET /preloaded-${tag}`), names.join(', '));
-    });
-  }
-}
-
-// ── logs ⇄ apm through the shared handle ─────────────────────────────────────
-
-console.log('\nLogs and APM together (correlation.cjs)');
-{
-  const { result, stdout } = await run('correlation.cjs');
-  const entries = entriesOf(logRequests('test-key-corr'));
-  const spans = spansOf(traceRequests('test-key-corr'));
-  const find = (message) => entries.find((e) => e.message === message);
-
-  check('ZharpAPM.init() with no options reuses the logger\'s key, service, environment, version, source and endpoint', () => {
-    assert.match(stdout, /APM active — service "corr-app", environment "corr-env"/);
-    const span = spans.find((s) => s.name === 'corr-span');
-    assert.ok(span, 'span sent with the logger\'s key to the logger\'s endpoint');
-    assert.equal(span.serviceName, 'corr-app');
-    assert.equal(span.resource['deployment.environment.name'], 'corr-env');
-    assert.equal(span.resource['service.version'], '3.1.4');
-    assert.equal(span.resource['zharp.source'], 'corr-src');
-  });
-  check('logs carry traceId/spanId while APM is active', () => {
-    const e = find('corr with apm');
-    assert.equal(e.metadata.traceId, result.spanTrace);
-    assert.equal(e.metadata.spanId, spans.find((s) => s.name === 'corr-span').spanId);
-  });
-  check('…and not before APM starts or after it stops', () => {
-    assert.equal('traceId' in find('corr no apm').metadata, false);
-    assert.equal('traceId' in find('corr after apm').metadata, false);
-  });
-  check('both packages use the same sessionId', () => {
-    const [logsSession, apmSession] = result.sessions;
-    assert.equal(logsSession, apmSession);
-    for (const e of entries) assert.equal(e.metadata.sessionId, logsSession);
-  });
-  check('a warning logged during APM joins its breadcrumb trail', () => {
-    assert.ok(result.crumbs.includes('log:corr with apm'), result.crumbs.join(', '));
-  });
-}
-
-console.log('\nAPM without logs (apm-alone.cjs)');
-{
-  const { result, stdout } = await run('apm-alone.cjs', { ZHARP_API_KEY: 'apm-alone-key', ZHARP_SERVICE: 'apm-alone', ZHARP_ENV: 'alone-env', ZHARP_ENDPOINT: endpoint });
-  check('init() from the environment traces http; @zharp/logs is never loaded', () => {
-    assert.equal(result.active, true);
-    assert.equal(result.logsLoaded, false);
-    assert.equal(result.handleLogs, false);
-    assert.deepEqual(lines(stdout), ['[Zharp] APM active — service "apm-alone", environment "alone-env"']);
-    const spans = spansOf(traceRequests('apm-alone-key'));
-    assert.ok(spans.some((s) => s.kind === 'SERVER' && s.name === 'GET /alone' && s.serviceName === 'apm-alone'));
-    for (const r of traceRequests('apm-alone-key')) assert.equal(r.headers['x-zharp-sdk'], APM_SDK);
-  });
-
-  const before = requests.length;
-  const noKey = await run('apm-alone.cjs', { ZHARP_SERVICE: 'apm-nokey', ZHARP_ENDPOINT: endpoint });
-  check('no API key: prints the hint, patches nothing, sends nothing', () => {
-    assert.equal(noKey.result.active, false);
-    assert.match(noKey.stderr, /\[Zharp\] No API key found — set ZHARP_API_KEY or call ZharpAPM\.init\(\{ apiKey \}\)/);
-    assert.equal(requests.length, before);
-  });
-
-  const disabled = await run('apm-alone.cjs', { ZHARP_API_KEY: 'apm-disabled', ZHARP_DISABLED: 'true', ZHARP_ENDPOINT: endpoint });
-  check('ZHARP_DISABLED=true: APM says so and sends nothing', () => {
-    assert.equal(disabled.result.active, false);
-    assert.deepEqual(lines(disabled.stdout), ['[Zharp] APM disabled by ZHARP_DISABLED — nothing will be sent']);
-    assert.equal(traceRequests('apm-disabled').length, 0);
-  });
-
-  const explicit = { apiKey: 'apm-explicit', service: 'apm-explicit-svc', environment: 'explicit-env' };
-  await run('apm-alone.cjs', { ZHARP_API_KEY: 'apm-env-key', ZHARP_SERVICE: 'apm-env-svc', ZHARP_VERSION: '5.5.5', ZHARP_ENDPOINT: endpoint }, [JSON.stringify(explicit)]);
-  check('explicit options override the environment', () => {
-    assert.equal(traceRequests('apm-env-key').length, 0);
-    const spans = spansOf(traceRequests('apm-explicit'));
-    assert.ok(spans.length);
-    for (const s of spans) {
-      assert.equal(s.serviceName, 'apm-explicit-svc');
-      assert.equal(s.resource['deployment.environment.name'], 'explicit-env');
-      assert.equal(s.resource['service.version'], '5.5.5', 'version still from ZHARP_VERSION');
-    }
-  });
 }
 
 // ── a Node script that never calls destroy() ─────────────────────────────────
@@ -502,9 +320,8 @@ console.log('\nExit without destroy (exit-without-destroy.cjs)');
     assert.equal(exited, true, 'still running after 15 s');
     assert.ok(Date.now() - started < 15_000);
   });
-  check('what was queued at exit was sent — logs and spans', () => {
+  check('what was queued at exit was sent', () => {
     assert.deepEqual(entries.map((e) => e.message).sort(), ['exit-check 0', 'exit-check 1', 'exit-check 2', 'exit-check in span']);
-    assert.deepEqual(spansOf(traceRequests('test-key-exit')).map((s) => s.name), ['exit-span']);
   });
 }
 
@@ -690,74 +507,6 @@ console.log('\nBrowser unload (browser-beacon.mjs)');
 
   check('browser: environment unset unless configured (NODE_ENV ignored)', () => {
     for (const b of beacons) assert.equal(b.environment, null);
-  });
-}
-
-// ── replay loads lazily ──────────────────────────────────────────────────────
-
-console.log('\nReplay is loaded lazily (replay-lazy.mjs)');
-{
-  const sampledIn = await run('replay-lazy.mjs', {}, ['sampled-in']);
-  check('rrweb is not loaded by ZharpAPM.init() without replay', () => {
-    assert.equal(sampledIn.result.afterPlainInit, false);
-  });
-  check('rrweb is loaded, and recording starts, once replay is enabled', () => {
-    assert.equal(sampledIn.result.afterReplayInit, true);
-    assert.equal(sampledIn.result.recording, true);
-    assert.equal(sampledIn.result.isReplaying, true);
-  });
-  check('the activation line mentions the replay sample rate', () => {
-    assert.ok(lines(sampledIn.stdout).includes('[Zharp] APM active — service "lazy-app", no environment set, session replay at 50% of sessions'), sampledIn.stdout);
-  });
-
-  const cjs = await run('require-no-rrweb.cjs');
-  check('require() of both CommonJS builds and ZharpAPM.init() do not load rrweb', () => {
-    assert.equal(cjs.result.loaded, false);
-  });
-
-  const sampledOut = await run('replay-lazy.mjs', {}, ['sampled-out']);
-  check('a session sampled out never loads rrweb', () => {
-    assert.equal(sampledOut.result.afterReplayInit, false);
-    assert.equal(sampledOut.result.recording, false);
-    assert.equal(sampledOut.result.isReplaying, false);
-  });
-}
-
-// ── replay retry ─────────────────────────────────────────────────────────────
-
-console.log('\nReplay retry (replay-retry.mjs)');
-{
-  await run('replay-retry.mjs');
-  const replay = ofType('replay', 'replay-flaky');
-  const bySeq = new Map();
-  for (const r of replay) {
-    if (!bySeq.has(r.body.sequence)) bySeq.set(r.body.sequence, []);
-    bySeq.get(r.body.sequence).push(r);
-  }
-
-  check('replay uses the key-less path with X-API-KEY and X-Zharp-SDK', () => {
-    assert.ok(replay.length);
-    for (const r of replay) {
-      assert.equal(r.url, '/api/v1/agent/replay');
-      assert.equal(r.headers['x-api-key'], 'replay-flaky');
-      assert.equal(r.headers['x-zharp-sdk'], APM_SDK);
-    }
-  });
-
-  check('a retried batch is resent unchanged, under the same sequence', () => {
-    for (const [seq, reqs] of bySeq) assert.equal(new Set(reqs.map((r) => r.raw)).size, 1, `sequence ${seq} sent with different bodies`);
-    assert.equal(bySeq.get(0)?.length, 2, 'sequence 0: failed once, then delivered');
-  });
-
-  check('a batch that keeps failing is dropped after 3 attempts; its sequence is not reused', () => {
-    assert.equal(bySeq.get(1)?.length, 3);
-    assert.ok(bySeq.has(2), 'the next batch is sequence 2');
-    const firstSeen = [...bySeq.keys()];
-    assert.deepEqual(firstSeen, [...firstSeen].sort((x, y) => x - y), 'sequences increase');
-  });
-
-  check('only one flush in flight at a time', () => {
-    assert.equal(replayMaxActive, 1);
   });
 }
 

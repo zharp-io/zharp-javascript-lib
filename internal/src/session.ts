@@ -10,11 +10,11 @@ function uuid(): string {
 }
 
 // One session ID per page load / app session.
-// Attached to every log entry and every recording so you can correlate all events
+// Attached to every log entry so you can correlate all events
 // from a single user session across frontend and backend.
 //
-// Kept on the shared handle rather than in a module variable: @zharp/logs and @zharp/apm each
-// bundle this file, and a log and the recording of the same page must carry the same ID.
+// Kept on the shared handle rather than in a module variable: the CommonJS and ES builds each
+// bundle this file, and a log from either must carry the same ID.
 export function getSessionId(): string {
   const handle = shared();
   if (!handle.sessionId) handle.sessionId = uuid();

@@ -1,9 +1,7 @@
-// A CommonJS application: requires the CJS builds, by package name.
-const http = require('http');
+// A CommonJS application: requires the CJS build, by package name.
 const { ZharpLogger } = require('@zharp/logs');
-const { ZharpAPM } = require('@zharp/apm');
 
 import('./scenario.mjs').then(async ({ scenario }) => {
-  const result = await scenario({ ZharpLogger, ZharpAPM, http, label: 'cjs' });
+  const result = await scenario({ ZharpLogger, label: 'cjs' });
   console.log(`RESULT ${JSON.stringify(result)}`);
 });

@@ -1,24 +1,9 @@
 /**
- * The Node scenario, shared by the ESM and CJS consumers so both builds of both packages are
- * held to the same checks. Everything observable over the wire is asserted by test/run.mjs; what can only be
- * seen from inside the process (the active trace before and after an await) is returned.
+ * The Node scenario, shared by the ESM and CJS consumers so both builds are held to the same
+ * checks. Everything is observed over the wire and asserted by test/run.mjs.
  */
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function get(http, port, path) {
-  return new Promise((resolve, reject) => {
-    http
-      .get({ hostname: '127.0.0.1', port, path }, (res) => {
-        let body = '';
-        res.on('data', (chunk) => (body += chunk));
-        res.on('end', () => resolve(JSON.parse(body)));
-      })
-      .on('error', reject);
-  });
-}
-
-export async function scenario({ ZharpLogger, ZharpAPM, http, label, namedGet }) {
+export async function scenario({ ZharpLogger, label }) {
   ZharpLogger.init({
     apiKey: 'test-key-123',
     service: `${label}-app`,
@@ -30,35 +15,6 @@ export async function scenario({ ZharpLogger, ZharpAPM, http, label, namedGet })
     maxBatchSize: 500,
     autoCapture: { errors: false, unhandledRejections: false },
   });
-  // No key, service or tags: APM takes them from the logger started above.
-  ZharpAPM.init({ breadcrumbs: false, flushInterval: 60_000 });
-
-  // ── a server whose handler awaits, to see whether the request's context survives ──
-  const server = http.createServer(async (req, res) => {
-    const before = ZharpAPM.currentTraceId();
-    await sleep(25);
-    await Promise.resolve();
-    const after = ZharpAPM.currentTraceId();
-    ZharpLogger.info(`inside request ${req.url}`);
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ before, after }));
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
-
-  // Two at once: if context were a single shared variable, one would see the other's trace.
-  const [a, b] = await Promise.all([get(http, port, '/a'), get(http, port, '/b')]);
-
-  // ESM only: a named import of `get` made before init() must still be traced.
-  let named = null;
-  if (namedGet) {
-    named = await new Promise((resolve, reject) => {
-      namedGet({ hostname: '127.0.0.1', port, path: '/named' }, (res) => {
-        res.resume();
-        res.on('end', () => resolve(true));
-      }).on('error', reject);
-    });
-  }
 
   // ── messages of every shape ──
   ZharpLogger.info('plain');
@@ -72,22 +28,6 @@ export async function scenario({ ZharpLogger, ZharpAPM, http, label, namedGet })
   const blob = 'x'.repeat(100_000);
   for (let i = 0; i < 30; i++) ZharpLogger.info(`big-${i}`, { blob });
 
-  // ── continueTrace ──
-  const tp = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;
-  const inner = ZharpAPM.continueTrace(tp, () => ZharpAPM.currentTraceId(), 'process-job');
-  const plain = ZharpAPM.continueTrace(`00-${'c'.repeat(32)}-${'d'.repeat(16)}-01`, () => ZharpAPM.currentTraceId());
-  await ZharpAPM.continueTrace(
-    `00-${'e'.repeat(32)}-${'f'.repeat(16)}-01`,
-    async () => {
-      await sleep(10);
-      ZharpLogger.info('in async job');
-    },
-    'async-job',
-  );
-
-  server.close();
-  await ZharpAPM.destroy();
   await ZharpLogger.destroy();
-
-  return { a, b, named, inner, plain };
+  return {};
 }

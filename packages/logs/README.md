@@ -198,8 +198,8 @@ export class ZharpNestLogger implements LoggerService {
 
 ## Tracing and session replay
 
-Add [`@zharp/apm`](https://www.npmjs.com/package/@zharp/apm). Started together, every log carries
-the trace it was written in.
+Use [`@zharp/node`](https://www.npmjs.com/package/@zharp/node) or [`@zharp/browser`](https://www.npmjs.com/package/@zharp/browser),
+which send logs, traces and errors together.
 
 ## License
 

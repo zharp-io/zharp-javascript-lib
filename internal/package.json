@@ -2,7 +2,7 @@
   "name": "@zharp/internal",
   "version": "0.0.0",
   "private": true,
-  "description": "Internals shared by @zharp/logs and @zharp/apm. Never published: tsup bundles it into each package.",
+  "description": "Internals shared by the Zharp packages. Never published: tsup bundles it into each package.",
   "exports": {
     "./*": "./src/*.ts"
   },

@@ -8,7 +8,7 @@ import { getSessionId } from '@zharp/internal/session';
 import { normalizeEndpoint } from '@zharp/internal/delivery';
 import { firstError, toMessage, withErrorsAsFields } from '@zharp/internal/message';
 import { announce, describeTarget, disabledByEnv, packageName, pick, readEnv, warn } from '@zharp/internal/env';
-import { ActiveSpan, PublishedConfig, shared } from '@zharp/internal/shared';
+import { PublishedConfig, shared } from '@zharp/internal/shared';
 
 const LEVELS = new Set(['debug', 'info', 'warn', 'error', 'fatal']);
 
@@ -80,7 +80,7 @@ export class ZharpLoggerClass {
 
     if ((config as any).tracing) {
       // Tracing lived here in unreleased builds. Saying so beats silently ignoring it.
-      warn('`tracing` is not a @zharp/logs option. Tracing is in @zharp/apm: ZharpAPM.init().');
+      warn('`tracing` is not a @zharp/logs option. Tracing is in @zharp/node and @zharp/browser.');
     }
 
     // Explicit config wins, then the environment variables a deployment already sets. No
@@ -154,8 +154,8 @@ export class ZharpLoggerClass {
       window.addEventListener('beforeunload', this.handleBeforeUnload);
     }
 
-    // Published on the shared handle so @zharp/apm, started after this with no options, reports
-    // as the same service to the same place. See internal/src/shared.ts.
+    // Published on the shared handle, where anything else on the page or in the process can see
+    // what this logger reports as. See internal/src/shared.ts.
     this.published = {
       apiKey: this.config.apiKey,
       service: this.config.service,
@@ -433,17 +433,6 @@ export class ZharpLoggerClass {
 
     const context = getRuntimeContext(appVersion);
 
-    // Stamp the log with the trace it happened inside. This is what turns "an error was logged"
-    // into "here is the request that produced it and everything else it did". The span comes
-    // from @zharp/apm through the shared handle; while it is not running there is none.
-    const handle = shared();
-    let span: ActiveSpan | null = null;
-    try {
-      span = handle.activeSpan ? handle.activeSpan() : null;
-    } catch {
-      span = null;
-    }
-
     const entry: LogEntry = {
       service,
       level,
@@ -463,23 +452,9 @@ export class ZharpLoggerClass {
         sessionId: getSessionId(),
         // Also kept here for backends older than the top-level tags.
         ...(environment ? { environment } : {}),
-        ...(span ? { traceId: span.traceId, spanId: span.spanId } : {}),
         context,
       },
     };
-
-    // Warnings and errors join @zharp/apm's breadcrumb trail, when it is running; ordinary
-    // chatter does not. A trail of twenty debug lines pushes out the click that actually
-    // explains the failure.
-    if (level === 'warn' || level === 'error' || level === 'fatal') {
-      handle.addBreadcrumb?.({ kind: 'log', message, level: level === 'warn' ? 'warn' : 'error' });
-    }
-
-    // Flag the session recording, so "sessions where something broke" finds this one. Guarded
-    // because replay is optional and may never have been started.
-    if (level === 'error' || level === 'fatal') {
-      handle.markError?.();
-    }
 
     this.queue.push(entry);
 

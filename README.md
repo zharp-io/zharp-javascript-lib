@@ -14,7 +14,7 @@ npm install @zharp/node      # in the server
 
 Both send OpenTelemetry (OTLP) to the same endpoint with the app's key. A request from a page to your API carries `traceparent` and `baggage`, so the page's spans and the server's are one trace, and the server's logs and errors are filed under the user and session that caused them.
 
-`@zharp/logs` and `@zharp/apm` are the previous generation and will be deprecated.
+`@zharp/logs` is the previous generation of logging and will be deprecated.
 
 ---
 
@@ -26,9 +26,8 @@ A pnpm workspace:
 packages/browser  @zharp/browser
 packages/node     @zharp/node
 packages/logs     @zharp/logs (to be deprecated)
-packages/apm      @zharp/apm (to be deprecated)
 internal          environment reading and other internals, bundled into each package at build time
-test              checks against the built packages and a fake backend (run.mjs: logs/apm,
+test              checks against the built packages and a fake backend (run.mjs: logs,
                   unified.mjs: browser/node); e2e/ runs browser → node against a real stack
 ```
 
