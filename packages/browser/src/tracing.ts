@@ -101,7 +101,7 @@ export class IdleSpan {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly maxTimer: ReturnType<typeof setTimeout>;
   /** A page load is not finished before the load event, however quiet the network is. */
-  held = false;
+  private held = false;
 
   constructor(
     readonly span: Span,
@@ -121,6 +121,12 @@ export class IdleSpan {
   done(): void {
     this.inflight = Math.max(0, this.inflight - 1);
     this.arm();
+  }
+
+  /** Do not end on idle until `release()`; the hard limit still applies. */
+  hold(): void {
+    this.held = true;
+    this.disarm();
   }
 
   release(): void {

@@ -186,7 +186,7 @@ export class ZharpBrowser {
     };
     if (document.readyState === 'complete') loaded();
     else {
-      root.held = true;
+      root.hold();
       window.addEventListener('load', () => setTimeout(loaded, 0), { once: true });
     }
   }
