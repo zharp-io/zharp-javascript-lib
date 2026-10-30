@@ -114,6 +114,10 @@ Everything else is plain OpenTelemetry: `trace.getActiveSpan()`, `trace.getTrace
 
 Traces and logs go as OTLP/protobuf, gzipped, to `{endpoint}/v1/traces` and `/v1/logs` with `Authorization: Bearer <key>`.
 
+## Readable stack traces
+
+Bundled or minified server code (a Next.js server build, an esbuild or webpack bundle) becomes original files, lines and code once its source maps are uploaded with a [Zharp bundler plugin](../bundler-plugins/README.md) or [`@zharp/cli`](../cli/README.md). Every error this SDK sends — `captureError`, error logs with an error, uncaught errors, exceptions recorded on spans by the instrumentations, and error logs from pino and winston — carries the debug IDs of the bundled files in its stack as `zharp.debug_ids`. Nothing to configure here.
+
 ## License
 
 MIT

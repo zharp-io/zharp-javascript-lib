@@ -1,6 +1,7 @@
 /**
  * Uncaught errors, unhandled rejections and (when asked for) the console.
  */
+import { debugIdAttributes } from '@zharp/internal/debug-ids';
 import { safeString, safely } from '../util';
 
 /** Whatever was thrown, as an Error. */
@@ -17,7 +18,9 @@ export function asError(value: unknown): Error {
 
 /**
  * The `exception.*` attributes Zharp groups errors by. The stack keeps a `Type: message` first
- * line: Chrome's stacks have one, Firefox's and Safari's do not.
+ * line: Chrome's stacks have one, Firefox's and Safari's do not. When the page's scripts were
+ * built with Zharp's source map tooling, `zharp.debug_ids` names the build of each file in the
+ * stack, so the server can map it back to the original source.
  */
 export function exceptionAttributes(error: Error, handled: boolean): Record<string, string> {
   const type = (error.name && error.name !== 'Error' ? error.name : error.constructor?.name) || 'Error';
@@ -30,6 +33,7 @@ export function exceptionAttributes(error: Error, handled: boolean): Record<stri
     'exception.message': message,
     'exception.stacktrace': stack,
     'zharp.handled': handled ? 'true' : 'false',
+    ...debugIdAttributes(stack),
   };
 }
 

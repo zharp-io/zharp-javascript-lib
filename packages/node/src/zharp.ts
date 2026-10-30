@@ -43,6 +43,7 @@ import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentation
 import { announce, describeTarget, disabledByEnv, nodeEnv, packageName, pick, warn } from '@zharp/internal/env';
 import { ContextLogProcessor, ContextSpanProcessor, ContextStore, userAttributes } from './context';
 import { captureConsole } from './console';
+import { DebugIdLogProcessor, DebugIdSpanProcessor } from './debug-ids';
 import { asError, exceptionAttributes, SEVERITY, type Level } from './errors';
 import type { Attributes, NodeOptions, ZharpUser } from './types';
 import { VERSION } from './version';
@@ -136,11 +137,13 @@ export class ZharpNode {
     this.spanProcessors = tracing
       ? [
           new ContextSpanProcessor(this.store),
+          new DebugIdSpanProcessor(),
           new BatchSpanProcessor({ exporter: new OTLPTraceExporter({ ...exporterOptions, url: `${endpoint}/v1/traces` }) }),
         ]
       : [new ContextSpanProcessor(this.store)];
     this.logProcessors = [
       new ContextLogProcessor(this.store),
+      new DebugIdLogProcessor(),
       new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ ...exporterOptions, url: `${endpoint}/v1/logs` }) }),
     ];
 

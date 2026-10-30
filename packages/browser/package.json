@@ -60,6 +60,7 @@
   "devDependencies": {
     "@rrweb/types": "^2.1.1",
     "@types/node": "^25.9.3",
+    "@zharp/internal": "workspace:*",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   }

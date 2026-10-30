@@ -120,6 +120,10 @@ Logs, errors (uncaught and `captureError`, with their stacks), the user, the ses
 | `ignoreUrls` | `[]` | URLs never traced, as strings (host or prefix) or RegExps. |
 | `sessionTimeoutMinutes` | `30` | |
 
+## Readable stack traces
+
+Minified stacks become original files, lines and code once the build's source maps are uploaded with a [Zharp bundler plugin](../bundler-plugins/README.md) or [`@zharp/cli`](../cli/README.md). Those tools register each emitted file's debug ID at load time; every error this SDK sends carries the IDs of the files in its stack as `zharp.debug_ids`, so the server finds the right map whatever URL the file was served from. Nothing to configure here.
+
 ## Delivery
 
 Batches of up to 100 records go out every 5 seconds, gzipped where the browser has `CompressionStream`. 429, 5xx and network failures are retried with backoff; the queue holds at most 1,000 records of each kind and drops the oldest past that. When the page is hidden or closed, what is left goes out with `fetch(…, { keepalive: true })` so it outlives the page. A rejected key (401/403) prints one console warning and stops sending from that page. The SDK never throws into your code.

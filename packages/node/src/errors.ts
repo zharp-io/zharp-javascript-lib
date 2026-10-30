@@ -7,6 +7,7 @@
  * makes an error event from either, so sending both would count every error twice.
  */
 import { inspect } from 'node:util';
+import { debugIdAttributes } from '@zharp/internal/debug-ids';
 
 /** OTLP severity numbers. */
 export const SEVERITY = { trace: 1, debug: 5, info: 9, warn: 13, error: 17, fatal: 21 } as const;
@@ -46,5 +47,6 @@ export function exceptionAttributes(error: Error, handled: boolean): Record<stri
     'exception.message': message,
     'exception.stacktrace': stack,
     'zharp.handled': handled ? 'true' : 'false',
+    ...debugIdAttributes(stack),
   };
 }
