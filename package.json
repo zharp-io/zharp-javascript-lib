@@ -1,7 +1,7 @@
 {
   "name": "zharp-js-sdk",
   "private": true,
-  "description": "Zharp's JavaScript SDKs: @zharp/logs and @zharp/apm",
+  "description": "Zharp's JavaScript SDKs: @zharp/browser and @zharp/node (and the older @zharp/logs and @zharp/apm)",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
@@ -9,7 +9,9 @@
   },
   "devDependencies": {
     "@zharp/apm": "workspace:*",
+    "@zharp/browser": "workspace:*",
     "@zharp/logs": "workspace:*",
+    "@zharp/node": "workspace:*",
     "jsdom": "^24.1.3"
   },
   "packageManager": "pnpm@10.17.1"

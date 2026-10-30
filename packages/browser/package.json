@@ -1,0 +1,66 @@
+{
+  "name": "@zharp/browser",
+  "version": "0.1.0",
+  "description": "Zharp Application Monitoring for the browser — errors, logs, traces and session replay",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "unpkg": "dist/zharp.min.js",
+  "jsdelivr": "dist/zharp.min.js",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./dist/zharp.min.js": "./dist/zharp.min.js",
+    "./dist/zharp-replay.min.js": "./dist/zharp-replay.min.js",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build && pnpm run typecheck"
+  },
+  "keywords": [
+    "zharp",
+    "apm",
+    "rum",
+    "tracing",
+    "error-tracking",
+    "logging",
+    "session-replay",
+    "rrweb",
+    "opentelemetry",
+    "traceparent",
+    "monitoring",
+    "observability"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zharp-io/zharp-javascript-lib.git",
+    "directory": "packages/browser"
+  },
+  "homepage": "https://zharp.io/docs/sdks/browser",
+  "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "dependencies": {
+    "rrweb": "^2.1.1"
+  },
+  "devDependencies": {
+    "@rrweb/types": "^2.1.1",
+    "@types/node": "^25.9.3",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}

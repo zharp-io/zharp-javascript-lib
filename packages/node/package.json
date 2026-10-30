@@ -1,0 +1,84 @@
+{
+  "name": "@zharp/node",
+  "version": "0.1.0",
+  "description": "Zharp Application Monitoring for Node.js — traces, logs and errors, on OpenTelemetry",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./init": {
+      "types": "./init.d.ts",
+      "import": "./init.mjs",
+      "require": "./init.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "./init.js",
+    "./init.mjs"
+  ],
+  "files": [
+    "dist",
+    "init.js",
+    "init.mjs",
+    "init.d.ts"
+  ],
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build && pnpm run typecheck"
+  },
+  "keywords": [
+    "zharp",
+    "apm",
+    "opentelemetry",
+    "tracing",
+    "logging",
+    "error-tracking",
+    "monitoring",
+    "observability",
+    "nodejs",
+    "nextjs"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zharp-io/zharp-javascript-lib.git",
+    "directory": "packages/node"
+  },
+  "homepage": "https://zharp.io/docs/sdks/node",
+  "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "dependencies": {
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.82.0",
+    "@opentelemetry/core": "^3.0.0",
+    "@opentelemetry/exporter-logs-otlp-proto": "^0.300.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.300.0",
+    "@opentelemetry/instrumentation": "^0.300.0",
+    "@opentelemetry/resources": "^3.0.0",
+    "@opentelemetry/sdk-logs": "^3.0.0",
+    "@opentelemetry/sdk-node": "^0.300.0",
+    "@opentelemetry/sdk-trace": "^3.0.0",
+    "@opentelemetry/winston-transport": "^0.35.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@zharp/internal": "workspace:*",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}
