@@ -9,7 +9,7 @@
  */
 import { register as registerLoader } from 'node:module';
 import {
-  DiagConsoleLogger,
+  type DiagLogger,
   DiagLogLevel,
   diag,
   logs,
@@ -99,7 +99,15 @@ export class ZharpNode {
     const release = pick(options.release, nodeEnv('ZHARP_RELEASE'), nodeEnv('ZHARP_VERSION'));
     const endpoint = (pick(options.endpoint, nodeEnv('ZHARP_ENDPOINT')) ?? DEFAULT_ENDPOINT).replace(/\/+$/, '');
 
-    if (options.debug) diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
+    if (options.debug) {
+      // Bound to the console as it is now, before the bridge patches it: OpenTelemetry's own
+      // messages about a failed export must not become log records that fail to export.
+      const out = { error: console.error, warn: console.warn, info: console.info, debug: console.debug, verbose: console.debug };
+      const prefixed = Object.fromEntries(
+        Object.entries(out).map(([level, fn]) => [level, (message: string, ...args: unknown[]) => fn.call(console, `[Zharp][otel] ${message}`, ...args)]),
+      ) as unknown as DiagLogger;
+      diag.setLogger(prefixed, DiagLogLevel.DEBUG);
+    }
 
     // ES modules can only be instrumented through a loader hook, and it has to be in place
     // before the application's first import — which is why init() belongs in a preloaded file.

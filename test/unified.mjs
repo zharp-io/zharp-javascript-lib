@@ -1,0 +1,341 @@
+/**
+ * Checks for @zharp/browser and @zharp/node against a fake OTLP endpoint (run `pnpm -r build`
+ * first; `pnpm test` does). Each scenario runs in its own Node process, loading the packages by
+ * name as an application would; the browser ones in jsdom.
+ *
+ * The real thing — a page calling a server, read back from ClickHouse — is test/e2e/run.mjs.
+ *
+ *     node test/unified.mjs
+ */
+import http from 'node:http';
+import { spawn } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import assert from 'node:assert/strict';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, '..');
+
+// ── fake endpoint ────────────────────────────────────────────────────────────
+
+const requests = [];
+const server = http.createServer((req, res) => {
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => {
+    let raw = Buffer.concat(chunks);
+    if (req.headers['content-encoding'] === 'gzip') raw = gunzipSync(raw);
+    const text = raw.toString('utf8');
+    let body = null;
+    try {
+      body = JSON.parse(text);
+    } catch {}
+    const key = (req.headers.authorization ?? '').replace(/^Bearer /, '');
+    requests.push({ path: req.url, key, headers: req.headers, raw, text, body });
+    res.writeHead(key === 'rejected-key' ? 401 : 200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+const endpoint = `http://127.0.0.1:${server.address().port}`;
+
+function run(args, env = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, args, {
+      cwd: root,
+      env: { ...process.env, ZHARP_TEST_ENDPOINT: endpoint, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('exit', (code) => {
+      const line = out.split('\n').find((l) => l.startsWith('RESULT '));
+      resolve({ code, out, err, result: line ? JSON.parse(line.slice(7)) : null });
+    });
+  });
+}
+
+let failures = 0;
+let passed = 0;
+function check(name, fn) {
+  try {
+    fn();
+    passed += 1;
+    console.log(`  ok    ${name}`);
+  } catch (error) {
+    failures += 1;
+    console.log(`  FAIL  ${name}\n        ${String(error.message).split('\n').join('\n        ')}`);
+  }
+}
+
+const byKey = (key, path) => requests.filter((r) => r.key === key && (!path || r.path.endsWith(path)));
+const attrs = (list = []) => Object.fromEntries(list.map(({ key, value }) => [key, Object.values(value)[0]]));
+const spansOf = (key) =>
+  byKey(key, '/v1/traces').flatMap((r) =>
+    r.body.resourceSpans.flatMap((rs) => rs.scopeSpans.flatMap((ss) => ss.spans.map((s) => ({ ...s, attrs: attrs(s.attributes), resource: attrs(rs.resource.attributes) })))),
+  );
+const logsOf = (key) =>
+  byKey(key, '/v1/logs').flatMap((r) =>
+    r.body.resourceLogs.flatMap((rl) => rl.scopeLogs.flatMap((sl) => sl.logRecords.map((l) => ({ ...l, attrs: attrs(l.attributes), resource: attrs(rl.resource.attributes) })))),
+  );
+const browserVersion = JSON.parse(readFileSync(join(root, 'packages/browser/package.json'), 'utf8')).version;
+
+// ── @zharp/browser ───────────────────────────────────────────────────────────
+
+console.log('\n@zharp/browser: spans, propagation, logs, errors, sessions (browser-basics.mjs)');
+{
+  const { result, err } = await run(['test/unified/browser-basics.mjs']);
+  assert.ok(result, err);
+  const spans = spansOf('browser-key');
+  const logs = logsOf('browser-key');
+  const named = (name) => spans.find((s) => s.name === name);
+
+  check('requests go to {endpoint}/v1/traces and /v1/logs as OTLP/JSON with the Bearer key', () => {
+    const sent = byKey('browser-key');
+    assert.ok(sent.length >= 2);
+    for (const r of sent) {
+      assert.match(r.path, /^\/v1\/(traces|logs)$/);
+      assert.equal(r.headers['content-type'], 'application/json');
+    }
+  });
+
+  check('resource: service, release, environment, sdk, browser and os from the user agent', () => {
+    const resource = spans[0].resource;
+    assert.deepEqual(
+      [resource['service.name'], resource['service.version'], resource['deployment.environment.name'], resource['telemetry.sdk.name'], resource['telemetry.sdk.language'], resource['telemetry.sdk.version']],
+      ['web-test', 'web@1', 'test', 'zharp', 'webjs', browserVersion],
+    );
+    assert.deepEqual([resource['browser.name'], resource['browser.version'], resource['os.name'], resource['os.version']], ['Chrome', '131', 'Windows', '10']);
+  });
+
+  check('a fresh session in sessionStorage is resumed, with its user; clearUser starts a new one', () => {
+    assert.equal(result.resumedSession, 'stored-session');
+    assert.equal(result.resumedUser, 'u-from-storage');
+    assert.equal(result.beforeClear, 'stored-session');
+    assert.notEqual(result.afterClear, 'stored-session');
+  });
+
+  check('a page load span, a navigation span, and a click span for the click that made a request', () => {
+    const pageload = named('pageload /start');
+    const navigation = named('navigation /next');
+    const click = named('click “Save changes”');
+    assert.ok(pageload && navigation && click, spans.map((s) => s.name).join(', '));
+    for (const root of [pageload, navigation, click]) {
+      assert.equal(root.parentSpanId, undefined);
+      assert.equal(root.kind, 1);
+    }
+    const sameOrigin = named('GET /api/same-origin');
+    assert.equal(sameOrigin.parentSpanId, click.spanId, 'request made by the click is its child');
+    assert.equal(sameOrigin.kind, 3);
+    assert.equal(sameOrigin.attrs['http.request.method'], 'GET');
+    assert.equal(sameOrigin.attrs['http.response.status_code'], 200);
+    assert.equal(sameOrigin.attrs['url.full'], 'http://localhost:5173/api/same-origin');
+  });
+
+  check('traceparent and baggage go to same-origin and tracingOrigins URLs only', () => {
+    const req = (part) => result.appRequests.find((r) => r.url.includes(part));
+    const same = req('/api/same-origin');
+    const allowed = req('api.allowed.test');
+    const third = req('third-party.test');
+    const sameSpan = named('GET /api/same-origin');
+    assert.equal(same.traceparent, `00-${sameSpan.traceId}-${sameSpan.spanId}-01`);
+    assert.match(allowed.traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    assert.equal(third.traceparent, null);
+    assert.equal(third.baggage, null);
+    assert.equal(same.baggage, 'session.id=stored-session,enduser.id=user%201');
+    assert.equal(allowed.baggage, 'caller=1,session.id=stored-session,enduser.id=user%201', "the caller's baggage is kept");
+  });
+
+  check('third-party requests still get a span; the SDK\'s own requests do not', () => {
+    assert.ok(named('GET /pixel'));
+    assert.ok(!spans.some((s) => String(s.attrs['url.full']).startsWith(endpoint)));
+  });
+
+  check('a 500 marks the client span as an error', () => {
+    const fail = named('GET /api/fail');
+    assert.equal(fail.status.code, 2);
+    assert.equal(fail.attrs['http.response.status_code'], 500);
+  });
+
+  check('XHR: a span and the trace headers', () => {
+    const xhr = named('GET /api/xhr');
+    assert.ok(xhr);
+    const tp = result.xhrHeaders.find(([n]) => n === 'traceparent');
+    assert.equal(tp?.[1], `00-${xhr.traceId}-${xhr.spanId}-01`);
+    assert.ok(result.xhrHeaders.some(([n, v]) => n === 'baggage' && v.includes('session.id=stored-session')));
+  });
+
+  check('every span and log carries session.id and enduser.id', () => {
+    for (const s of spans.filter((x) => x.name !== 'pageload /start')) {
+      assert.equal(s.attrs['session.id'], 'stored-session', s.name);
+      assert.equal(s.attrs['enduser.id'], 'user 1', s.name);
+    }
+    for (const l of logs) assert.equal(l.attrs['session.id'], 'stored-session');
+  });
+
+  check('Zharp.log.info: severity 9, body, attributes', () => {
+    const hello = logs.find((l) => l.body.stringValue === 'hello');
+    assert.equal(hello.severityNumber, 9);
+    assert.equal(hello.severityText, 'INFO');
+    assert.equal(hello.attrs.orderId, 7);
+  });
+
+  check('a log inside startSpan carries that span\'s trace and span id', () => {
+    const manual = named('manual work');
+    const inside = logs.find((l) => l.body.stringValue === 'inside manual');
+    assert.equal(inside.traceId, manual.traceId);
+    assert.equal(inside.spanId, manual.spanId);
+  });
+
+  check('captureError: handled, with type, message and a stack that starts "Type: message"; sent once', () => {
+    const captured = logs.filter((l) => l.attrs['exception.message'] === 'captured once');
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].severityNumber, 17);
+    assert.equal(captured[0].attrs['exception.type'], 'RangeError');
+    assert.equal(captured[0].attrs['zharp.handled'], 'true');
+    assert.match(captured[0].attrs['exception.stacktrace'], /^RangeError: captured once\n/);
+  });
+
+  check('uncaught error and unhandled rejection: unhandled', () => {
+    const uncaught = logs.find((l) => l.attrs['exception.message'] === 'uncaught one');
+    assert.equal(uncaught.attrs['zharp.handled'], 'false');
+    assert.equal(uncaught.attrs['exception.type'], 'TypeError');
+    const rejected = logs.find((l) => l.attrs['zharp.mechanism'] === 'onunhandledrejection');
+    assert.equal(rejected.attrs['exception.message'], 'a string reason');
+    assert.equal(rejected.attrs['zharp.handled'], 'false');
+  });
+}
+
+console.log('\n@zharp/browser: session replay (browser-replay.mjs)');
+{
+  const off = await run(['test/unified/browser-replay.mjs', 'off']);
+  check('replay off: rrweb is never loaded and nothing is sent to /v1/replays', () => {
+    assert.equal(off.result.loadedAtStart, false);
+    assert.equal(byKey('replay-off', '/v1/replays').length, 0);
+  });
+
+  const buffer = await run(['test/unified/browser-replay.mjs', 'buffer']);
+  const bufferBatches = byKey('replay-buffer', '/v1/replays').map((r) => r.body);
+  check('onErrorSampleRate: recorded but nothing sent before the error', () => {
+    assert.equal(buffer.result.loadedAtStart, true);
+    assert.equal(buffer.result.decided, 'buffer');
+    assert.ok(bufferBatches.length >= 2, `${bufferBatches.length} batches`);
+    // The first batch holds what happened before the error.
+    assert.ok(JSON.stringify(bufferBatches[0].events).includes('before the error'));
+  });
+  check('after the error: the buffer, then the rest of the session, numbered 0, 1, 2… with hasError', () => {
+    assert.deepEqual(bufferBatches.map((b) => b.sequence), bufferBatches.map((_, i) => i));
+    assert.ok(bufferBatches.every((b) => b.hasError === true && b.sessionId === buffer.result.sessionId));
+    assert.ok(bufferBatches.some((b) => JSON.stringify(b.events).includes('later still')));
+    assert.equal(buffer.result.modeAfter, 'session', 'the switch is remembered for the session');
+    assert.equal(buffer.result.seq, bufferBatches.length, 'the next number is stored for a reload');
+    assert.ok(bufferBatches[0].traceIds.every((id) => /^[0-9a-f]{32}$/.test(id)) && bufferBatches[0].traceIds.length >= 1);
+    assert.equal(bufferBatches[0].url, 'http://localhost:5173/buffer');
+  });
+
+  await run(['test/unified/browser-replay.mjs', 'session']);
+  const sessionBatches = byKey('replay-session', '/v1/replays').map((r) => r.body);
+  check('sampleRate: the whole session is sent, without waiting for an error', () => {
+    assert.ok(sessionBatches.length >= 2);
+    assert.ok(JSON.stringify(sessionBatches[0].events).includes('before the error'));
+    assert.ok(sessionBatches.every((b) => b.hasError === false));
+    assert.ok(sessionBatches[0].events.some((e) => e.type === 2), 'starts with a full snapshot');
+  });
+}
+
+console.log('\n@zharp/browser: script tag (browser-cdn.mjs) and a rejected key (browser-rejected.mjs)');
+{
+  const cdn = await run(['test/unified/browser-cdn.mjs']);
+  check('dist/zharp.min.js defines a global Zharp with the same API', () => {
+    assert.equal(cdn.result.type, 'object');
+    assert.deepEqual(cdn.result.api, ['init', 'setUser', 'clearUser', 'captureError', 'startSpan', 'setTag', 'flush']);
+    assert.deepEqual(cdn.result.log, ['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
+  });
+  const size = readFileSync(join(root, 'packages/browser/dist/zharp.min.js')).length;
+  check(`dist/zharp.min.js stays small (${size} bytes) and does not contain rrweb`, () => {
+    assert.ok(size < 40_000);
+    assert.doesNotMatch(readFileSync(join(root, 'packages/browser/dist/zharp.min.js'), 'utf8'), /rrweb|takeFullSnapshot/);
+  });
+
+  const rejected = await run(['test/unified/browser-rejected.mjs']);
+  check('rejected key: one warning, and nothing sent after the first refusal', () => {
+    assert.equal(rejected.result.warnings.length, 1, rejected.result.warnings.join('\n'));
+    assert.match(rejected.result.warnings[0], /key was rejected \(HTTP 401\)/);
+    assert.equal(byKey('rejected-key').length, 1);
+  });
+}
+
+// ── @zharp/node ──────────────────────────────────────────────────────────────
+
+const nodeArgs = (file, ...args) => ['--import', './test/unified/node-instrument.mjs', `./test/unified/${file}`, ...args];
+const text = (key, path) => byKey(key, path).map((r) => r.text).join('\n');
+
+console.log('\n@zharp/node (node-app.mjs, preloaded with --import)');
+{
+  const app = await run(nodeArgs('node-app.mjs'), { TEST_KEY: 'node-key' });
+  check('one activation line', () => {
+    assert.match(app.out, /\[Zharp\] Application monitoring active — service "node-test", environment "test"/);
+  });
+  check('OTLP protobuf, gzipped, to /v1/traces and /v1/logs with the Bearer key', () => {
+    const sent = byKey('node-key');
+    assert.ok(sent.some((r) => r.path === '/otlp/v1/traces') && sent.some((r) => r.path === '/otlp/v1/logs'), sent.map((r) => r.path).join(', '));
+    for (const r of sent) {
+      assert.equal(r.headers['content-type'], 'application/x-protobuf');
+      assert.equal(r.headers['content-encoding'], 'gzip');
+    }
+  });
+  const traces = text('node-key', '/v1/traces');
+  const logs = text('node-key', '/v1/logs');
+  check('resource: service, release, environment, telemetry.sdk.name zharp / nodejs', () => {
+    for (const s of ['node-test', 'api@1', 'deployment.environment.name', 'zharp', 'nodejs']) assert.ok(traces.includes(s), s);
+  });
+  check('the incoming traceparent is continued', () => {
+    const traceId = Buffer.from('0af7651916cd43dd8448eb211c80319c', 'hex');
+    assert.ok(byKey('node-key', '/v1/traces').some((r) => r.raw.includes(traceId)), "spans in the caller's trace");
+  });
+  check('session.id and enduser.id from baggage on spans and logs', () => {
+    for (const payload of [traces, logs]) {
+      assert.ok(payload.includes('browser-session-1'), 'session id');
+      assert.ok(payload.includes('user 1'), 'user id (decoded)');
+    }
+  });
+  check('setUser inside a request reaches its spans and logs', () => {
+    assert.ok(traces.includes('server-set-user'));
+    assert.ok(logs.includes('server-set-user'));
+  });
+  check('Zharp.log, console.log and captureError are sent as logs', () => {
+    for (const s of ['from the browser', 'console in handler', 'inside job', 'caught in handler', 'exception.stacktrace', 'zharp.handled']) assert.ok(logs.includes(s), s);
+  });
+  check('ESM import and CommonJS require get the same started instance', () => {
+    assert.deepEqual(app.result, { sameInstance: true, active: true });
+  });
+}
+
+console.log('\n@zharp/node: crashes (node-crash.mjs)');
+for (const [mode, type] of [['throw', 'RangeError'], ['reject', 'SyntaxError']]) {
+  const crash = await run(nodeArgs('node-crash.mjs', mode), { TEST_KEY: `crash-${mode}` });
+  check(`${mode === 'throw' ? 'uncaught exception' : 'unhandled rejection'}: sent as unhandled, then exit 1 with the stack on stderr`, () => {
+    assert.equal(crash.code, 1);
+    assert.match(crash.err, new RegExp(`^${type}: `));
+    const logs = text(`crash-${mode}`, '/v1/logs');
+    assert.ok(logs.includes(type) && logs.includes('zharp.handled') && logs.includes('false'));
+  });
+}
+
+console.log('\n@zharp/node: no key');
+{
+  const before = requests.length;
+  const nokey = await run(nodeArgs('node-crash.mjs', 'none'), { TEST_KEY: '', ZHARP_API_KEY: '' });
+  check('prints how to fix it, starts nothing, sends nothing', () => {
+    assert.match(nokey.err, /\[Zharp\] No key found/);
+    assert.equal(requests.length, before);
+  });
+}
+
+server.close();
+console.log(failures ? `\n${failures} check(s) failed, ${passed} passed` : `\nAll ${passed} checks passed`);
+process.exitCode = failures ? 1 : 0;

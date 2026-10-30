@@ -171,8 +171,9 @@ export class ZharpBrowser {
       }),
     );
 
-    this.startPageLoad(tracer);
+    // Replay first, so it hears about the page load's trace while the recorder downloads.
     replay?.start();
+    this.startPageLoad(tracer);
   }
 
   /** The page load span: from navigation start until the load event, its requests, and a quiet second. */
