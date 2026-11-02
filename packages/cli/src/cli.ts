@@ -18,6 +18,7 @@ Usage:
         [--release <r>] [--delete-after]
   zharp proguard upload <mapping.txt> --app <id> --uuid <uuid>
   zharp dart-symbols upload <dir> --app <id>            Flutter --split-debug-info output
+        [--obfuscation-map <file>]                      (and its obfuscation map)
   zharp dsym upload <path> --app <id>                   A .dSYM, or a folder of them
 
 Options:
@@ -49,6 +50,7 @@ async function main(argv: string[]): Promise<void> {
       app: { type: 'string' },
       release: { type: 'string' },
       uuid: { type: 'string' },
+      'obfuscation-map': { type: 'string' },
       include: { type: 'string', multiple: true },
       exclude: { type: 'string', multiple: true },
       'delete-after': { type: 'boolean' },
@@ -105,7 +107,7 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case 'dart-symbols upload': {
-      await uploadDartSymbols(needTarget('the --split-debug-info directory'), connect(), { release, dryRun, logger });
+      await uploadDartSymbols(needTarget('the --split-debug-info directory'), connect(), { release, dryRun, logger, obfuscationMap: values['obfuscation-map'] });
       return;
     }
     case 'dsym upload': {

@@ -7,7 +7,7 @@ export { readElf, type ElfInfo } from './elf';
 export { globToRegExp, pathFilter, type Pattern } from './files';
 export { consoleLogger, silentLogger, type Logger } from './log';
 export { readMachO, type MachOImage } from './macho';
-export { findDartSymbols, findDsymImages, uploadDartSymbols, uploadDsyms, uploadProguard, type NativeUploadOptions } from './native';
+export { findDartSymbols, findDsymImages, findObfuscationMap, type DartSymbolsUploadOptions, uploadDartSymbols, uploadDsyms, uploadProguard, type NativeUploadOptions } from './native';
 export {
   deleteSourcemaps,
   findSourceFiles,

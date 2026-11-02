@@ -54,11 +54,14 @@ zharp proguard upload app/build/outputs/mapping/release/mapping.txt --app 42 --u
 ## Flutter
 
 ```bash
-flutter build apk --obfuscate --split-debug-info=build/symbols
+flutter build apk --obfuscate --split-debug-info=build/symbols \
+  --extra-gen-snapshot-options=--save-obfuscation-map=build/obfuscation.json
 zharp dart-symbols upload build/symbols --app 42
 ```
 
 Each `*.symbols` file is uploaded under its ELF GNU build ID — the `build_id` an obfuscated Dart stack trace prints — with its architecture.
+
+The obfuscation map (the JSON array of `[obfuscated, original]` names that `--save-obfuscation-map` writes) lets Zharp restore class and method names in error types and messages too. `obfuscation.json` or `*.obfuscation.json` in the symbols directory or the directory next to it is found and uploaded automatically; pass `--obfuscation-map <file>` for another location. One map covers every architecture of a build, so it is uploaded once per build ID.
 
 ## iOS
 

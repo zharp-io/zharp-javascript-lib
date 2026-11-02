@@ -3,8 +3,8 @@
  * `--split-debug-info`) and dSYMs (iOS). Each is uploaded gzipped, keyed by the ID its platform's
  * errors carry.
  */
-import { readFileSync, statSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { eachLimit, uploadArtifact, type Artifact, type Connection } from './api';
 import { readElf, isElf } from './elf';
 import { formatBytes, walk } from './files';
@@ -82,7 +82,45 @@ export function findDartSymbols(path: string, logger: Logger = consoleLogger()):
   return out;
 }
 
-export async function uploadDartSymbols(path: string, connection: Connection | null, options: NativeUploadOptions = {}) {
+/**
+ * The obfuscation map Flutter writes with
+ * `--extra-gen-snapshot-options=--save-obfuscation-map=<file>`: `obfuscation.json` or
+ * `*.obfuscation.json`, in the symbols directory or the directory next to it.
+ */
+export function findObfuscationMap(symbolsPath: string): string | undefined {
+  const dir = statSync(symbolsPath).isDirectory() ? resolve(symbolsPath) : dirname(resolve(symbolsPath));
+  for (const where of [dir, dirname(dir)]) {
+    let names: string[];
+    try {
+      names = readdirSync(where).sort();
+    } catch {
+      continue;
+    }
+    const found = names.find((n) => n === 'obfuscation.json') ?? names.find((n) => n.endsWith('.obfuscation.json'));
+    if (found && statSync(join(where, found)).isFile()) return join(where, found);
+  }
+  return undefined;
+}
+
+/** The map's contents, checked: a JSON array of obfuscated/original name pairs (flat or nested). */
+function readObfuscationMap(file: string): Buffer {
+  const data = readFileSync(file);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data.toString('utf8'));
+  } catch (error) {
+    throw new Error(`${file} is not valid JSON (${(error as Error).message}).`);
+  }
+  if (!Array.isArray(parsed)) throw new Error(`${file} is not a Dart obfuscation map: expected a JSON array of [obfuscated, original] names.`);
+  return data;
+}
+
+export interface DartSymbolsUploadOptions extends NativeUploadOptions {
+  /** The obfuscation map to upload with the symbols. Default: found next to them (see findObfuscationMap). */
+  obfuscationMap?: string;
+}
+
+export async function uploadDartSymbols(path: string, connection: Connection | null, options: DartSymbolsUploadOptions = {}) {
   const logger = options.logger ?? consoleLogger();
   const files = findDartSymbols(path, logger);
   if (files.length === 0) throw new Error(`No Dart symbol files in ${path} — build with \`flutter build … --obfuscate --split-debug-info=<dir>\` and pass that directory.`);
@@ -96,6 +134,19 @@ export async function uploadDartSymbols(path: string, connection: Connection | n
     data: readFileSync(f.path),
     gzip: true,
   }));
+  if (options.obfuscationMap && !existsSync(options.obfuscationMap)) throw new Error(`${options.obfuscationMap} does not exist.`);
+  const mapFile = options.obfuscationMap ?? findObfuscationMap(path);
+  if (mapFile) {
+    const data = readObfuscationMap(mapFile);
+    // One map serves every architecture of the build: once per build ID.
+    const buildIds = [...new Set(files.map((f) => f.buildId))];
+    logger.info(`With obfuscation map ${basename(mapFile)} for ${buildIds.length} build ID(s)`);
+    for (const debugId of buildIds) {
+      artifacts.push({ kind: 'dart-obfuscation-map', debugId, name: basename(mapFile), release: options.release, data, gzip: true });
+    }
+  } else {
+    logger.info('No obfuscation map found (build with --extra-gen-snapshot-options=--save-obfuscation-map=build/obfuscation.json, or pass --obfuscation-map): obfuscated names in error messages stay as they are.');
+  }
   return send(connection, artifacts, options);
 }
 

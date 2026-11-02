@@ -421,7 +421,39 @@ await check('readMachO: thin and universal files, uppercase UUIDs and arch names
     assert.match(badUuid.err, /--uuid/);
   });
 
+  const obfuscation = JSON.stringify(['MyHomePage', 'aB', 'checkout', 'cD']);
+  writeFileSync(join(native, 'obfuscation.json'), obfuscation); // next to the symbols directory
   const dart = await run([CLI, 'dart-symbols', 'upload', join(native, 'symbols'), '--app', '9', '--release', '1.0.0+1'], env);
+  await check('dart-symbols upload: obfuscation.json next to the symbols is found and sent once per build ID', () => {
+    const u = native_().filter((x) => x.kind === 'dart-obfuscation-map').sort((a, b) => a.debugId.localeCompare(b.debugId));
+    assert.deepEqual(u.map((x) => [x.name, x.debugId, x.release]), [
+      ['obfuscation.json', '99887766554433221100ffeeddccbbaa', '1.0.0+1'],
+      ['obfuscation.json', 'aabbccddeeff00112233445566778899', '1.0.0+1'],
+    ]);
+    assert.equal(gunzipSync(u[0].data).toString(), obfuscation);
+    assert.equal(u[0].url, '/api/v1/applications/9/artifacts');
+  });
+
+  // One build, two symbol files with the same build ID; the map given explicitly, elsewhere.
+  const oneBuild = join(native, 'one-build');
+  mkdirSync(join(oneBuild, 'symbols'), { recursive: true });
+  writeFileSync(join(oneBuild, 'symbols/app.android-arm64.symbols'), elf({ bits: 64, little: true, buildId: '0f'.repeat(16), viaSection: true, machine: 183 }));
+  writeFileSync(join(oneBuild, 'symbols/app.android-arm64.copy.symbols'), elf({ bits: 64, little: true, buildId: '0f'.repeat(16), viaSection: true, machine: 183 }));
+  writeFileSync(join(native, 'Build/release.obfuscation.json'), obfuscation);
+  const explicit = await run([CLI, 'dart-symbols', 'upload', join(oneBuild, 'symbols'), '--app', '9', '--obfuscation-map', join(native, 'Build/release.obfuscation.json')], { ...env, ZHARP_AUTH_TOKEN: 'obf-token' });
+  await check('dart-symbols upload --obfuscation-map: one map upload for a build ID shared by several files', () => {
+    assert.equal(explicit.code, 0, explicit.err);
+    const u = uploads.filter((x) => x.token === 'obf-token' && x.kind === 'dart-obfuscation-map');
+    assert.deepEqual(u.map((x) => [x.name, x.debugId]), [['release.obfuscation.json', '0f'.repeat(16)]]);
+  });
+
+  writeFileSync(join(oneBuild, 'bad.json'), '{"not": "a map"}');
+  const bad = await run([CLI, 'dart-symbols', 'upload', join(oneBuild, 'symbols'), '--app', '9', '--obfuscation-map', join(oneBuild, 'bad.json')], { ...env, ZHARP_AUTH_TOKEN: 'bad-map-token' });
+  await check('dart-symbols upload with a map that is not a JSON array: exit 1, nothing sent', () => {
+    assert.equal(bad.code, 1);
+    assert.match(bad.err, /not a Dart obfuscation map/);
+    assert.equal(uploads.filter((x) => x.token === 'bad-map-token').length, 0);
+  });
   await check('dart-symbols upload: one per symbol file, debug ID = ELF build ID, arch from the file name', () => {
     assert.equal(dart.code, 0, dart.err);
     const u = native_().filter((x) => x.kind === 'dart-symbols').sort((a, b) => a.name.localeCompare(b.name));
