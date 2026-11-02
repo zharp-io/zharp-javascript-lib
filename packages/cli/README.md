@@ -10,7 +10,7 @@ Requires Node 18.18 or later. No dependencies.
 
 ## Authentication
 
-Uploads need a **workspace API key with the `artifacts:write` scope** (Workspace settings → API keys). It is a secret for your CI, not the app key your SDK sends data with.
+Uploads need a **workspace API key with the `artifacts:write` scope** (Integrations & API → Main API keys, "Build uploads"). It is a secret for your CI, not the app key your SDK sends data with.
 
 | Variable | |
 |---|---|
