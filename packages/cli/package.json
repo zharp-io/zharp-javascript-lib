@@ -53,6 +53,9 @@
   },
   "homepage": "https://zharp.io/docs/sourcemaps",
   "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@types/node": "^25.9.3",
     "tsup": "^8.5.1",

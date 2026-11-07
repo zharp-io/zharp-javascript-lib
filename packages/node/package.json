@@ -62,6 +62,9 @@
   },
   "homepage": "https://zharp.io/docs/sdks/node",
   "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@opentelemetry/api": "^1.10.0",
     "@opentelemetry/auto-instrumentations-node": "^0.82.0",

@@ -54,6 +54,9 @@
   },
   "homepage": "https://zharp.io/docs/sdks/browser",
   "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "rrweb": "^2.1.1"
   },

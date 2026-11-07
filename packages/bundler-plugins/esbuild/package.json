@@ -45,6 +45,9 @@
   },
   "homepage": "https://zharp.io/docs/sourcemaps",
   "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@zharp/cli": "workspace:*"
   },
