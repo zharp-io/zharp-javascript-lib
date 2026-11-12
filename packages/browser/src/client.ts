@@ -6,6 +6,7 @@
  * wires them together and is the public API. Nothing here throws into the page: every entry
  * point catches, and a failure to send is silent apart from one warning for a rejected key.
  */
+import { bodySettings } from '@zharp/internal/bodies';
 import { parseUserAgent } from './environment';
 import { asError, exceptionAttributes, watchConsole, watchErrors, type ConsoleMethod } from './instrument/errors';
 import { absolute, instrumentFetch, instrumentXhr, matches, sameOrigin, type HttpHooks } from './instrument/http';
@@ -140,6 +141,7 @@ export class ZharpBrowser {
 
     const ignore = options.ignoreUrls ?? [];
     const tracingOrigins = options.tracingOrigins ?? [];
+    const bodies = bodySettings(options.captureBodies);
     const httpHooks: HttpHooks = {
       tracer,
       shouldTrace: (url) => {
@@ -148,6 +150,9 @@ export class ZharpBrowser {
       },
       shouldPropagate: (url) => sameOrigin(url) || matches(url, tracingOrigins),
       baggage: () => this.baggage(),
+      bodies,
+      // The app's own APIs only, unless the app names the URLs itself.
+      shouldCaptureBodies: (url) => (bodies?.urls ? matches(url, bodies.urls) : sameOrigin(url) || matches(url, tracingOrigins)),
     };
 
     const t = running.teardowns;

@@ -3,7 +3,7 @@ import { ZharpBrowser } from './client';
 export { ZharpBrowser } from './client';
 export type { ZharpSpan } from './client';
 export { VERSION } from './version';
-export type { BrowserOptions, ReplayOptions, ReplayEvent, ZharpUser, Attributes } from './types';
+export type { BrowserOptions, ReplayOptions, ReplayEvent, ZharpUser, Attributes, CaptureBodies, CaptureBodiesOptions } from './types';
 
 // One instance per page, kept on globalThis: two copies of the package in one bundle (or the
 // script tag and a bundle) must not patch fetch twice or keep two sessions.

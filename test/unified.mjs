@@ -404,6 +404,106 @@ console.log('\n@zharp/node: ZHARP_TRACING=false (node-logs-only.mjs)');
   });
 }
 
+// ── captureBodies ────────────────────────────────────────────────────────────
+
+console.log('\n@zharp/browser: captureBodies (browser-bodies.mjs)');
+{
+  const errors = await run(['test/unified/browser-bodies.mjs', 'errors']);
+  assert.ok(errors.result, errors.err);
+  const all = await run(['test/unified/browser-bodies.mjs', 'all']);
+  assert.ok(all.result, all.err);
+  const off = await run(['test/unified/browser-bodies.mjs', 'off']);
+  assert.ok(off.result, off.err);
+  const span = (key, name) => spansOf(key).find((s) => s.name === name);
+  const login = span('bodies-errors', 'POST /api/login');
+
+  check('errors: a failed request carries its request and response bodies, with the content types', () => {
+    assert.ok(login.attrs['http.request.body'], JSON.stringify(login.attrs));
+    assert.equal(login.attrs['http.request.header.content-type'], 'application/json');
+    assert.equal(JSON.parse(login.attrs['http.response.body']).error, 'bad credentials');
+    assert.equal(login.attrs['http.response.header.content-type'], 'application/json');
+  });
+  check('secret keys are [Filtered] (built-in and redactKeys), the rest is kept', () => {
+    const sent = JSON.parse(login.attrs['http.request.body']);
+    assert.deepEqual(sent, { email: 'a@b.test', password: '[Filtered]', dateOfBirth: '[Filtered]', remember: true });
+    const got = JSON.parse(login.attrs['http.response.body']);
+    assert.equal(got.token, '[Filtered]');
+    assert.equal(got.user.apiKey, '[Filtered]');
+    assert.equal(got.user.email, 'a@b.test');
+  });
+  check('the application still reads the response it captured', () => {
+    assert.deepEqual(errors.result.consumed, ['bad credentials']);
+  });
+  check('errors: successful requests carry no bodies', () => {
+    const ok = span('bodies-errors', 'PUT /api/ok');
+    assert.ok(ok);
+    assert.equal(ok.attrs['http.request.body'], undefined);
+    assert.equal(ok.attrs['http.response.body'], undefined);
+  });
+  check('tracingOrigins are captured; third parties never are', () => {
+    assert.equal(span('bodies-errors', 'POST /v1/fail').attrs['http.request.body'], '{"n":1}');
+    const third = spansOf('bodies-errors').find((s) => String(s.attrs['url.full']).startsWith('https://third-party.test'));
+    assert.ok(third);
+    assert.equal(third.attrs['http.request.body'], undefined);
+  });
+  check('event streams and binary responses are not read', () => {
+    assert.equal(span('bodies-errors', 'GET /api/events').attrs['http.response.body'], undefined);
+    assert.equal(span('bodies-errors', 'GET /api/image').attrs['http.response.body'], undefined);
+  });
+  check('all: successful requests too; forms are redacted; long bodies are cut at maxSize', () => {
+    assert.equal(span('bodies-all', 'PUT /api/ok').attrs['http.request.body'], '{"name":"Ada"}');
+    assert.equal(span('bodies-all', 'POST /api/form').attrs['http.request.body'], 'user=ada&password=%5BFiltered%5D');
+    const big = span('bodies-all', 'GET /api/big');
+    assert.equal(big.attrs['http.response.body'].length, 1000);
+    assert.equal(big.attrs['http.response.body.truncated'], true);
+  });
+  check('the span keeps the time the response arrived, not the time its body was read', () => {
+    const s = span('bodies-all', 'GET /api/big');
+    assert.ok(BigInt(s.endTimeUnixNano) >= BigInt(s.startTimeUnixNano));
+  });
+  check('off by default: no bodies at all', () => {
+    for (const s of spansOf('bodies-off')) {
+      assert.equal(s.attrs['http.request.body'], undefined, s.name);
+      assert.equal(s.attrs['http.response.body'], undefined, s.name);
+    }
+    assert.ok(span('bodies-off', 'POST /api/login'));
+  });
+}
+
+console.log('\n@zharp/node: captureBodies (node-bodies.mjs, ZHARP_CAPTURE_BODIES=errors)');
+{
+  const app = await run(nodeArgs('node-bodies.mjs'), { TEST_KEY: 'node-bodies', ZHARP_CAPTURE_BODIES: 'errors' });
+  assert.ok(app.result, app.err + app.out);
+  const traces = text('node-bodies', '/v1/traces');
+  check('the app reads and answers exactly as without the SDK', () => {
+    assert.match(app.result.signup, /email ada@x\.test taken/);
+    assert.equal(app.result.later, 'failed for 60 bytes');
+    assert.match(app.result.pay, /card declined/);
+    assert.equal(app.result.list, '{"listed":true}');
+    assert.equal(app.result.fine.text, '{"fine":true}');
+  });
+  check('incoming failed request: request and response bodies, secrets [Filtered]', () => {
+    assert.ok(traces.includes('http.request.body'));
+    assert.ok(traces.includes('"email":"ada@x.test","password":"[Filtered]"'), 'request body');
+    assert.ok(traces.includes('"sessionToken":"[Filtered]"'), 'response body');
+    assert.ok(traces.includes('http.response.header.content-type'), 'response content type from writeHead');
+    assert.ok(!traces.includes('pw-secret') && !traces.includes('srv-token'));
+  });
+  check('a body read late, by async iteration, is still captured; a written-in-parts response is joined', () => {
+    assert.ok(traces.includes('late-body-yyyy'));
+    assert.ok(traces.includes('failed for 60 bytes'));
+  });
+  check('outgoing failed call: its request body and its gzipped response, inflated and redacted', () => {
+    assert.ok(traces.includes('"amount":5,"cvv":"[Filtered]"'));
+    assert.ok(traces.includes('"error":"card declined","cardNumber":"[Filtered]"'));
+    assert.ok(!traces.includes('4242424242424242') && !traces.includes('"cvv":"123"'));
+  });
+  check('errors mode: successful requests, incoming and outgoing, carry no bodies', () => {
+    assert.ok(!traces.includes('ok-request-body'));
+    assert.ok(!traces.includes('ok-outgoing-body'));
+  });
+}
+
 server.close();
 console.log(failures ? `\n${failures} check(s) failed, ${passed} passed` : `\nAll ${passed} checks passed`);
 process.exitCode = failures ? 1 : 0;

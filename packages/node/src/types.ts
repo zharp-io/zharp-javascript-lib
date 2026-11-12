@@ -14,6 +14,28 @@ export interface ZharpUser {
   name?: string;
 }
 
+/** `captureBodies`: which request and response bodies go on HTTP spans. */
+export interface CaptureBodiesOptions {
+  /** `errors` (default): failed requests only (status 400 and above). `all`: every request. */
+  mode?: 'errors' | 'all';
+  /** Characters kept per body. Default 8192, at most 16384. */
+  maxSize?: number;
+  /**
+   * More keys whose values are replaced with `[Filtered]`, on top of the built-in ones. A string
+   * matches a key ignoring case, `-` and `_`; a RegExp is tested against the key as it is.
+   */
+  redactKeys?: Array<string | RegExp>;
+  /**
+   * Which requests (incoming and outgoing) have their bodies captured: a bare host matches that
+   * host, a string with a scheme matches URLs starting with it, a RegExp is tested against the
+   * full URL. Default: all of them.
+   */
+  urls?: Array<string | RegExp>;
+}
+
+/** `true` is `'errors'`. */
+export type CaptureBodies = boolean | 'errors' | 'all' | CaptureBodiesOptions;
+
 export interface NodeOptions {
   /**
    * The app's key from the Zharp dashboard (`zpk_…`), or a workspace API key with the ingest
@@ -48,6 +70,19 @@ export interface NodeOptions {
    * whatever this says.
    */
   captureConsole?: boolean;
+  /**
+   * Request and response bodies on HTTP spans — incoming requests and outgoing http/https
+   * calls. Default **off**. `'errors'` (or `true`) keeps them for failed requests only (status
+   * 400 and above); `'all'` for every request. Falls back to `ZHARP_CAPTURE_BODIES`
+   * (`errors` or `all`). Text bodies only, capped at 8 KB, and values under secret-looking keys
+   * (`password`, `token`, `authorization`, `card`, …) are replaced with `[Filtered]` before
+   * anything is sent. Other personal data in a body is sent as it is: add its keys to
+   * `redactKeys`.
+   *
+   *     captureBodies: 'errors'
+   *     captureBodies: { mode: 'all', redactKeys: ['dateOfBirth'], urls: [/\/api\//] }
+   */
+  captureBodies?: CaptureBodies;
   /**
    * Capture uncaught exceptions and unhandled rejections. Default true. The process still
    * exits as Node would have, once they have been sent.

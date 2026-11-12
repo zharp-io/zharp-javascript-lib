@@ -41,6 +41,8 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-proto';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { announce, describeTarget, disabledByEnv, nodeEnv, packageName, pick, warn } from '@zharp/internal/env';
+import { bodySettings } from '@zharp/internal/bodies';
+import { withBodyCapture } from './bodies';
 import { ContextLogProcessor, ContextSpanProcessor, ContextStore, userAttributes } from './context';
 import { captureConsole } from './console';
 import { DebugIdLogProcessor, DebugIdSpanProcessor } from './debug-ids';
@@ -161,6 +163,7 @@ export class ZharpNode {
     const propagator = new CompositePropagator({
       propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
     });
+    const bodies = bodySettings(options.captureBodies, nodeEnv('ZHARP_CAPTURE_BODIES'));
     const rate = typeof options.sampleRate === 'number' ? Math.min(1, Math.max(0, options.sampleRate)) : 1;
 
     this.sdk = new NodeSDK({
@@ -182,6 +185,9 @@ export class ZharpNode {
               '@opentelemetry/instrumentation-net': { enabled: false },
               '@opentelemetry/instrumentation-fs': { enabled: false },
               ...options.instrumentations,
+              ...(bodies && {
+                '@opentelemetry/instrumentation-http': withBodyCapture(bodies, options.instrumentations?.['@opentelemetry/instrumentation-http'] as any) as any,
+              }),
             })
           : logsOnlyInstrumentations(options)),
         ...(options.extraInstrumentations ?? []),

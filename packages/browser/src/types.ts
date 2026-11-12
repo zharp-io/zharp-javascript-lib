@@ -50,6 +50,27 @@ export interface ReplayOptions {
   recorderUrl?: string;
 }
 
+/** `captureBodies`: which request and response bodies go on request spans. */
+export interface CaptureBodiesOptions {
+  /** `errors` (default): failed requests only (status 400 and above, or no response). `all`: every request. */
+  mode?: 'errors' | 'all';
+  /** Characters kept per body. Default 8192, at most 16384. */
+  maxSize?: number;
+  /**
+   * More keys whose values are replaced with `[Filtered]`, on top of the built-in ones. A string
+   * matches a key ignoring case, `-` and `_`; a RegExp is tested against the key as it is.
+   */
+  redactKeys?: Array<string | RegExp>;
+  /**
+   * Which requests have their bodies captured, matched like `tracingOrigins`. Default:
+   * same-origin requests and `tracingOrigins` — your own APIs, never third parties.
+   */
+  urls?: Array<string | RegExp>;
+}
+
+/** `true` is `'errors'`. */
+export type CaptureBodies = boolean | 'errors' | 'all' | CaptureBodiesOptions;
+
 export interface BrowserOptions {
   /** The app's key from the Zharp dashboard (`zpk_…`). Safe to ship in a page: it can only send. */
   key: string;
@@ -89,6 +110,18 @@ export interface BrowserOptions {
   captureConsole?: boolean | Array<'debug' | 'log' | 'info' | 'warn' | 'error'>;
   /** Spans for clicks that lead to requests. Default true. */
   interactions?: boolean;
+  /**
+   * Request and response bodies on request spans. Default **off**. `'errors'` (or `true`) keeps
+   * them for failed requests only (status 400 and above, or no response); `'all'` for every
+   * request. Only your own APIs — same-origin and `tracingOrigins` — unless `urls` is set.
+   * Text bodies only, capped at 8 KB, and values under secret-looking keys (`password`,
+   * `token`, `authorization`, `card`, …) are replaced with `[Filtered]` before anything is sent.
+   * Other personal data in a body is sent as it is: add its keys to `redactKeys`.
+   *
+   *     captureBodies: 'errors'
+   *     captureBodies: { mode: 'all', redactKeys: ['dateOfBirth'], maxSize: 4096 }
+   */
+  captureBodies?: CaptureBodies;
   /** URLs never traced (no span, no headers), e.g. analytics beacons. */
   ignoreUrls?: Array<string | RegExp>;
   /** Minutes without activity before a new session starts. Default 30. */
