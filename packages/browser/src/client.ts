@@ -6,7 +6,7 @@
  * wires them together and is the public API. Nothing here throws into the page: every entry
  * point catches, and a failure to send is silent apart from one warning for a rejected key.
  */
-import { bodySettings } from '@zharp/internal/bodies';
+import { bodySettings, redactUrl } from '@zharp/internal/bodies';
 import { parseUserAgent } from './environment';
 import { asError, exceptionAttributes, watchConsole, watchErrors, type ConsoleMethod } from './instrument/errors';
 import { absolute, instrumentFetch, instrumentXhr, matches, sameOrigin, type HttpHooks } from './instrument/http';
@@ -164,7 +164,7 @@ export class ZharpBrowser {
     t.push(
       watchNavigation((route) => {
         session.touch();
-        if (tracing) tracer.startRoot('navigation', route, { 'url.full': location.href });
+        if (tracing) tracer.startRoot('navigation', route, { 'url.full': redactUrl(location.href) });
       }),
     );
     if (tracing && options.interactions !== false) t.push(watchClicks((label, selector) => tracer.noteClick(label, selector)));
@@ -189,7 +189,7 @@ export class ZharpBrowser {
   /** The page load span: from navigation start until the load event, its requests, and a quiet second. */
   private startPageLoad(tracer: Tracer): void {
     const timeOrigin = typeof performance !== 'undefined' && performance.timeOrigin ? performance.timeOrigin : now();
-    const root = tracer.startRoot('pageload', currentRoute(), { 'url.full': location.href, 'document.referrer': document.referrer || undefined }, timeOrigin);
+    const root = tracer.startRoot('pageload', currentRoute(), { 'url.full': redactUrl(location.href), 'document.referrer': document.referrer || undefined }, timeOrigin);
     const loaded = () => {
       root.span.setAttributes(navigationTimings());
       root.release();
@@ -314,7 +314,7 @@ export class ZharpBrowser {
       if (!running) return;
       const span = running.tracer.activeSpan();
       const time = toNanos(now());
-      const attrs: Record<string, unknown> = { ...this.contextAttributes(), 'url.full': location.href };
+      const attrs: Record<string, unknown> = { ...this.contextAttributes(), 'url.full': redactUrl(location.href) };
       for (const key in attributes) {
         const value = attributes[key];
         // An Error passed with an error log is the reason for it: sent as the exception, with its stack.

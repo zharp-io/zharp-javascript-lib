@@ -446,13 +446,33 @@ console.log('\n@zharp/browser: captureBodies (browser-bodies.mjs)');
     assert.ok(third);
     assert.equal(third.attrs['http.request.body'], undefined);
   });
-  check('event streams and binary responses are not read', () => {
-    assert.equal(span('bodies-errors', 'GET /api/events').attrs['http.response.body'], undefined);
-    assert.equal(span('bodies-errors', 'GET /api/image').attrs['http.response.body'], undefined);
+  check('event streams and binary responses are described, not read', () => {
+    assert.equal(span('bodies-errors', 'GET /api/events').attrs['http.response.body'], '[event stream]');
+    assert.equal(span('bodies-errors', 'GET /api/image').attrs['http.response.body'], '[binary · image/png]');
+  });
+  check('a form upload keeps every field name; the file is described, the password filtered', () => {
+    const upload = span('bodies-errors', 'POST /api/upload');
+    assert.equal(upload.attrs['http.request.header.content-type'], 'multipart/form-data');
+    assert.deepEqual(JSON.parse(upload.attrs['http.request.body']), { title: 'Holiday', password: '[Filtered]', photo: '[file photo.png · image/png · 2 KB]' });
+  });
+  check('inline images and long base64 become a short description; the fields after them stay', () => {
+    const profile = span('bodies-errors', 'POST /api/profile');
+    const sent = JSON.parse(profile.attrs['http.request.body']);
+    assert.equal(sent.avatar, '[image/png · 32 KB]');
+    assert.equal(sent.blob, '[base64 · 1 KB]');
+    assert.equal(sent.name, 'Ada');
+  });
+  check('a secret object keeps its keys, every value filtered', () => {
+    const sent = JSON.parse(span('bodies-errors', 'POST /api/profile').attrs['http.request.body']);
+    assert.deepEqual(sent.card, { brand: '[Filtered]', last4: '[Filtered]' });
+  });
+  check('secret query values are filtered in url.full; the rest of the URL stays', () => {
+    assert.equal(span('bodies-errors', 'POST /api/profile').attrs['url.full'], 'http://localhost:5173/api/profile?token=[Filtered]&page=2');
+    assert.ok(!JSON.stringify(spansOf('bodies-off')).includes('url-secret'), 'even with captureBodies off');
   });
   check('all: successful requests too; forms are redacted; long bodies are cut at maxSize', () => {
     assert.equal(span('bodies-all', 'PUT /api/ok').attrs['http.request.body'], '{"name":"Ada"}');
-    assert.equal(span('bodies-all', 'POST /api/form').attrs['http.request.body'], 'user=ada&password=%5BFiltered%5D');
+    assert.equal(span('bodies-all', 'POST /api/form').attrs['http.request.body'], 'user=ada&password=[Filtered]');
     const big = span('bodies-all', 'GET /api/big');
     assert.equal(big.attrs['http.response.body'].length, 1000);
     assert.equal(big.attrs['http.response.body.truncated'], true);
@@ -497,6 +517,19 @@ console.log('\n@zharp/node: captureBodies (node-bodies.mjs, ZHARP_CAPTURE_BODIES
     assert.ok(traces.includes('"amount":5,"cvv":"[Filtered]"'));
     assert.ok(traces.includes('"error":"card declined","cardNumber":"[Filtered]"'));
     assert.ok(!traces.includes('4242424242424242') && !traces.includes('"cvv":"123"'));
+  });
+  check('a form upload: every field by name, the 100 KB file described not sent, the password filtered', () => {
+    assert.match(app.result.upload, /"received":10\d{4}/);
+    assert.ok(traces.includes('"title":"Holiday","password":"[Filtered]","avatar":"[file me.png · image/png · 100 KB]","after":"still-here"'), 'multipart summary');
+    assert.ok(!traces.includes('upload-secret'));
+  });
+  check('a binary response is described by type and size', () => {
+    assert.equal(app.result.thumb, 3000);
+    assert.ok(traces.includes('[binary · image/png · 3 KB]'));
+  });
+  check('secret query values are filtered on every span', () => {
+    assert.ok(!traces.includes('query-secret-1'));
+    assert.ok(traces.includes('token=[Filtered]&size=2'));
   });
   check('errors mode: successful requests, incoming and outgoing, carry no bodies', () => {
     assert.ok(!traces.includes('ok-request-body'));

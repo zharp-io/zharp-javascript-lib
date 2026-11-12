@@ -18,7 +18,7 @@ export interface ZharpUser {
 export interface CaptureBodiesOptions {
   /** `errors` (default): failed requests only (status 400 and above). `all`: every request. */
   mode?: 'errors' | 'all';
-  /** Characters kept per body. Default 8192, at most 16384. */
+  /** Characters kept per body. Default 32768 (32 KB), at most 131072 (128 KB). */
   maxSize?: number;
   /**
    * More keys whose values are replaced with `[Filtered]`, on top of the built-in ones. A string
@@ -74,10 +74,11 @@ export interface NodeOptions {
    * Request and response bodies on HTTP spans — incoming requests and outgoing http/https
    * calls. Default **off**. `'errors'` (or `true`) keeps them for failed requests only (status
    * 400 and above); `'all'` for every request. Falls back to `ZHARP_CAPTURE_BODIES`
-   * (`errors` or `all`). Text bodies only, capped at 8 KB, and values under secret-looking keys
-   * (`password`, `token`, `authorization`, `card`, …) are replaced with `[Filtered]` before
-   * anything is sent. Other personal data in a body is sent as it is: add its keys to
-   * `redactKeys`.
+   * (`errors` or `all`). Text is capped at 32 KB; files in uploads, inline images and binary
+   * bodies are described (name, type, size), never sent. Field names are always kept; values
+   * under secret-looking keys (`password`, `token`, `authorization`, `card`, …) are replaced
+   * with `[Filtered]` before anything is sent. Other personal data in a body is sent as it is:
+   * add its keys to `redactKeys`.
    *
    *     captureBodies: 'errors'
    *     captureBodies: { mode: 'all', redactKeys: ['dateOfBirth'], urls: [/\/api\//] }

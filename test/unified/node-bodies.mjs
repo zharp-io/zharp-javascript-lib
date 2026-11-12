@@ -57,6 +57,16 @@ const server = http.createServer(async (req, res) => {
     const out = await call(`${down}/charge`, JSON.stringify({ amount: 5, cvv: '123' }));
     res.writeHead(out.status, { 'content-type': 'application/json' });
     res.end(out.text);
+  } else if (req.url === '/upload') {
+    // A form upload, read in full by the app.
+    let size = 0;
+    for await (const chunk of req) size += chunk.length;
+    res.writeHead(413, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'too large', received: size }));
+  } else if (req.url.startsWith('/thumb')) {
+    req.resume();
+    res.writeHead(500, { 'content-type': 'image/png' });
+    res.end(Buffer.alloc(3000, 7));
   } else {
     req.resume();
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -72,6 +82,17 @@ results.later = await (await fetch(`${base}/later`, { method: 'POST', headers: {
 results.pay = await (await fetch(`${base}/pay`, { method: 'POST' })).text();
 results.list = await (await fetch(`${base}/list`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"page":"ok-request-body"}' })).text();
 results.fine = await call(`${down}/fine`, '{"outgoing":"ok-outgoing-body"}');
+
+const boundary = 'zharpBoundary42';
+const upload = Buffer.concat([
+  Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\nHoliday\r\n`),
+  Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="password"\r\n\r\nupload-secret\r\n`),
+  Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="avatar"; filename="me.png"\r\nContent-Type: image/png\r\n\r\n`),
+  Buffer.alloc(100 * 1024, 1),
+  Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="after"\r\n\r\nstill-here\r\n--${boundary}--\r\n`),
+]);
+results.upload = await (await fetch(`${base}/upload`, { method: 'POST', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body: upload })).text();
+results.thumb = (await (await fetch(`${base}/thumb?token=query-secret-1&size=2`)).arrayBuffer()).byteLength;
 
 await Zharp.flush();
 server.close();

@@ -54,7 +54,7 @@ export interface ReplayOptions {
 export interface CaptureBodiesOptions {
   /** `errors` (default): failed requests only (status 400 and above, or no response). `all`: every request. */
   mode?: 'errors' | 'all';
-  /** Characters kept per body. Default 8192, at most 16384. */
+  /** Characters kept per body. Default 32768 (32 KB), at most 131072 (128 KB). */
   maxSize?: number;
   /**
    * More keys whose values are replaced with `[Filtered]`, on top of the built-in ones. A string
@@ -114,9 +114,10 @@ export interface BrowserOptions {
    * Request and response bodies on request spans. Default **off**. `'errors'` (or `true`) keeps
    * them for failed requests only (status 400 and above, or no response); `'all'` for every
    * request. Only your own APIs — same-origin and `tracingOrigins` — unless `urls` is set.
-   * Text bodies only, capped at 8 KB, and values under secret-looking keys (`password`,
-   * `token`, `authorization`, `card`, …) are replaced with `[Filtered]` before anything is sent.
-   * Other personal data in a body is sent as it is: add its keys to `redactKeys`.
+   * Text is capped at 32 KB; files, inline images and binary bodies are described (name, type,
+   * size), never sent. Field names are always kept; values under secret-looking keys
+   * (`password`, `token`, `authorization`, `card`, …) are replaced with `[Filtered]` before
+   * anything is sent. Other personal data in a body is sent as it is: add its keys to `redactKeys`.
    *
    *     captureBodies: 'errors'
    *     captureBodies: { mode: 'all', redactKeys: ['dateOfBirth'], maxSize: 4096 }

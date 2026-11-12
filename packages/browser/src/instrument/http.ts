@@ -5,7 +5,7 @@
  * `baggage`: an unexpected header on a third-party request turns it into a CORS preflight the
  * third party may refuse. Every request still gets a span; the SDK's own requests get neither.
  */
-import { bodyAttributes, isTextual, wanted, type BodySettings } from '@zharp/internal/bodies';
+import { bodyAttributes, describedAttributes, fileLabel, isTextual, rawLimit, redactUrl, wanted, type BodySettings } from '@zharp/internal/bodies';
 import { Kind, Status, type Span, type Tracer } from '../tracing';
 import { now, safely } from '../util';
 
@@ -34,7 +34,7 @@ function begin(hooks: HttpHooks, method: string, url: string): { span: Span; don
   const { parent, waiters } = hooks.tracer.requestStarting();
   const full = absolute(url);
   const span = hooks.tracer.startSpan(`${method} ${pathOf(full)}`, Kind.Client, parent);
-  span.setAttributes({ 'http.request.method': method, 'url.full': full, 'server.address': hostOf(full) });
+  span.setAttributes({ 'http.request.method': method, 'url.full': redactUrl(full), 'server.address': hostOf(full) });
   for (const waiter of waiters) waiter.begin();
   return {
     span,
@@ -75,26 +75,41 @@ function begin(hooks: HttpHooks, method: string, url: string): { span: Span; don
 
 // ── bodies ────────────────────────────────────────────────────────────────────
 
-/** A request body as text, when it is text. Streams are never read; the caller's own body is never consumed. */
-function requestText(body: unknown, contentType: string | null): string | Promise<string> | undefined {
-  if (body == null) return undefined;
-  if (typeof body === 'string') return body;
-  if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) return body.toString();
+type Attrs = Record<string, unknown>;
+
+/**
+ * The request body's attributes. Text is kept (redacted); a form upload is shown as its fields
+ * with each file described; anything else is described by type and size. Streams are never
+ * read, and the caller's own body is never consumed.
+ */
+function requestAttributes(body: unknown, contentType: string | null, settings: BodySettings): Attrs | Promise<Attrs> {
+  if (body == null) return {};
+  const text = (t: string, type: string | null, cut = false): Attrs =>
+    isTextual(type) ? bodyAttributes('request', t, type, settings, cut) : describedAttributes('request', type, t.length);
+  if (typeof body === 'string') return text(body, contentType);
+  if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) return text(body.toString(), 'application/x-www-form-urlencoded');
   if (typeof FormData !== 'undefined' && body instanceof FormData) {
-    const fields: Record<string, string> = {};
+    const fields: Record<string, unknown> = {};
     body.forEach((value, key) => {
-      fields[key] = typeof value === 'string' ? value : `[file ${(value as File).name || 'blob'}]`;
+      const shown = typeof value === 'string' ? value : fileLabel((value as File).name, (value as File).type || undefined, (value as File).size);
+      const existing = fields[key];
+      fields[key] = existing === undefined ? shown : Array.isArray(existing) ? [...existing, shown] : [existing, shown];
     });
-    return JSON.stringify(fields);
+    return bodyAttributes('request', JSON.stringify(fields), 'multipart/form-data', settings);
   }
   if (typeof Blob !== 'undefined' && body instanceof Blob) {
-    return isTextual(body.type || contentType) && body.size <= 256 * 1024 ? body.text() : undefined;
+    const type = body.type || contentType;
+    if (!isTextual(type)) return describedAttributes('request', type, body.size);
+    const limit = rawLimit(settings);
+    return body.slice(0, limit).text().then((t) => text(t, type, body.size > limit), () => ({}));
   }
-  if (contentType && isTextual(contentType)) {
-    if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
-    if (ArrayBuffer.isView(body)) return new TextDecoder().decode(body as ArrayBufferView);
+  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+    const size = (body as ArrayBuffer).byteLength;
+    if (!contentType || !isTextual(contentType)) return describedAttributes('request', contentType, size);
+    return text(new TextDecoder().decode(body as ArrayBuffer), contentType);
   }
-  return undefined;
+  if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) return describedAttributes('request', contentType);
+  return {};
 }
 
 /** Up to `limit` characters of a response copy; the rest is cancelled, never downloaded twice. */
@@ -121,10 +136,15 @@ async function readLimited(response: Response, limit: number): Promise<{ text: s
 /** The content type the browser gives a body the caller sent without one. */
 function implicitType(body: unknown): string | null {
   if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) return 'application/x-www-form-urlencoded';
-  if (typeof FormData !== 'undefined' && body instanceof FormData) return 'application/json'; // sent as its fields, in JSON
+  if (typeof FormData !== 'undefined' && body instanceof FormData) return 'multipart/form-data';
   if (typeof Blob !== 'undefined' && body instanceof Blob) return body.type || null;
   return null;
 }
+
+const contentLength = (headers: Headers | undefined): number | undefined => {
+  const n = Number(headers?.get('content-length'));
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+};
 
 function headerOf(headers: HeadersInit | undefined, name: string): string | null {
   if (!headers) return null;
@@ -151,7 +171,7 @@ export function instrumentFetch(hooks: HttpHooks): () => void {
 
     // Bodies: what is needed to read them later is set aside now, before fetch consumes anything.
     const bodies = hooks.bodies && hooks.shouldCaptureBodies(url) ? hooks.bodies : null;
-    let sent: (() => string | Promise<string> | undefined) | undefined;
+    let sent: (() => Attrs | Promise<Attrs>) | undefined;
     let sentType: string | null = null;
     if (bodies) {
       safely(() => {
@@ -160,10 +180,15 @@ export function instrumentFetch(hooks: HttpHooks): () => void {
         if (init?.body != null) {
           const body = init.body;
           sentType = (body instanceof FormData ? null : sentType) ?? implicitType(body);
-          sent = () => requestText(body, sentType);
-        } else if (isRequest && (input as Request).body && isTextual(sentType)) {
-          const copy = (input as Request).clone();
-          sent = () => copy.text();
+          sent = () => requestAttributes(body, sentType, bodies);
+        } else if (isRequest && (input as Request).body) {
+          const type = sentType;
+          if (isTextual(type)) {
+            const copy = (input as Request).clone();
+            sent = () => copy.text().then((t) => requestAttributes(t, type, bodies));
+          } else {
+            sent = () => describedAttributes('request', type, contentLength((input as Request).headers));
+          }
         }
       });
     }
@@ -185,15 +210,18 @@ export function instrumentFetch(hooks: HttpHooks): () => void {
         ? (status) => {
             if (!wanted(bodies, status)) return undefined;
             const responseType = response?.headers.get('content-type') ?? null;
-            // Copied now, before the caller reads it; text only, never a stream of events.
-            const copy = response && response.body && isTextual(responseType) ? safely(() => response.clone()) : undefined;
+            const hasBody = !!response?.body && response.status !== 204 && response.status !== 304;
+            // Copied now, before the caller reads it; text only. Anything else (an image, an event
+            // stream) is described, never read.
+            const copy = hasBody && isTextual(responseType) ? safely(() => response!.clone()) : undefined;
             return (async () => {
-              const attributes: Record<string, unknown> = {};
-              const text = await Promise.resolve(sent?.()).catch(() => undefined);
-              Object.assign(attributes, bodyAttributes('request', text, sentType, bodies));
+              const attributes: Attrs = {};
+              Object.assign(attributes, (await Promise.resolve(sent?.()).catch(() => undefined)) ?? {});
               if (copy) {
-                const read = await readLimited(copy, bodies.maxSize).catch(() => null);
+                const read = await readLimited(copy, rawLimit(bodies)).catch(() => null);
                 if (read) Object.assign(attributes, bodyAttributes('response', read.text, responseType, bodies, read.cut));
+              } else if (hasBody && response) {
+                Object.assign(attributes, describedAttributes('response', responseType, contentLength(response.headers)));
               }
               return attributes;
             })();
@@ -264,22 +292,24 @@ export function instrumentXhr(hooks: HttpHooks): () => void {
             if (!wanted(bodies, status)) return undefined;
             const sentType: string | null = (body instanceof FormData ? null : state.contentType) ?? implicitType(body);
             const responseType = safely(() => xhr.getResponseHeader('content-type')) ?? null;
-            const received = safely(() =>
-              xhr.responseType === '' || xhr.responseType === 'text'
-                ? xhr.responseText
-                : xhr.responseType === 'json' && xhr.response != null
-                  ? JSON.stringify(xhr.response)
-                  : undefined,
-            );
-            const attributes = bodyAttributes('response', received, responseType, bodies);
-            const text = requestText(body, sentType);
-            if (text && typeof text !== 'string') {
-              return text.then(
-                (t) => ({ ...attributes, ...bodyAttributes('request', t, sentType, bodies) }),
-                () => attributes,
-              );
+            const attributes: Attrs =
+              safely(() => {
+                const kind = xhr.responseType;
+                const response = xhr.response;
+                if (response == null || response === '') return {};
+                if (kind === 'blob') return describedAttributes('response', responseType, (response as Blob).size);
+                if (kind === 'arraybuffer') return describedAttributes('response', responseType, (response as ArrayBuffer).byteLength);
+                if (kind === 'document') return {};
+                const text = kind === 'json' ? JSON.stringify(response) : xhr.responseText;
+                const limit = rawLimit(bodies);
+                if (!isTextual(responseType)) return describedAttributes('response', responseType, text.length);
+                return bodyAttributes('response', text.slice(0, limit), responseType, bodies, text.length > limit);
+              }) ?? {};
+            const sentAttributes = requestAttributes(body, sentType, bodies);
+            if (sentAttributes && typeof (sentAttributes as Promise<Attrs>).then === 'function') {
+              return (sentAttributes as Promise<Attrs>).then((a) => ({ ...attributes, ...a }), () => attributes);
             }
-            return { ...attributes, ...bodyAttributes('request', text, sentType, bodies) };
+            return { ...attributes, ...(sentAttributes as Attrs) };
           }
         : undefined;
       this.addEventListener('loadend', () => safely(() => request.done(this.status, undefined, reader)));

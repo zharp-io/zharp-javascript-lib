@@ -43,6 +43,7 @@ import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentation
 import { announce, describeTarget, disabledByEnv, nodeEnv, packageName, pick, warn } from '@zharp/internal/env';
 import { bodySettings } from '@zharp/internal/bodies';
 import { withBodyCapture } from './bodies';
+import { UrlRedactionSpanProcessor } from './urls';
 import { ContextLogProcessor, ContextSpanProcessor, ContextStore, userAttributes } from './context';
 import { captureConsole } from './console';
 import { DebugIdLogProcessor, DebugIdSpanProcessor } from './debug-ids';
@@ -139,6 +140,7 @@ export class ZharpNode {
     this.spanProcessors = tracing
       ? [
           new ContextSpanProcessor(this.store),
+          new UrlRedactionSpanProcessor(),
           new DebugIdSpanProcessor(),
           new BatchSpanProcessor({ exporter: new OTLPTraceExporter({ ...exporterOptions, url: `${endpoint}/v1/traces` }) }),
         ]

@@ -41,6 +41,18 @@ await fetch('https://api.allowed.test/v1/fail', { method: 'POST', body: '{"n":1}
 await fetch('https://third-party.test/fail', { method: 'POST', body: '{"secretless":"but third party"}' });
 await fetch('/api/events');
 await fetch('/api/image');
+// A form upload with a file, inline images in JSON, a nested secret, and a token in the URL.
+const form = new FormData();
+form.append('title', 'Holiday');
+form.append('password', 'form-secret');
+form.append('photo', new File([new Uint8Array(2048)], 'photo.png', { type: 'image/png' }));
+await fetch('/api/upload', { method: 'POST', body: form });
+const pixel = 'data:image/png;base64,' + 'iVBORw0KGgo'.repeat(4000);
+await fetch('/api/profile?token=url-secret&page=2', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ avatar: pixel, blob: 'QUJD'.repeat(500) + '1', card: { brand: 'visa', last4: '4242' }, name: 'Ada' }),
+});
 
 await wait(1_800);
 await Zharp.flush();
