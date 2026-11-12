@@ -145,9 +145,9 @@ const CONTAINS = [
   'authorization', 'cookie', 'creditcard', 'cardnumber', 'cvv', 'cvc', 'ssn', 'iban', 'sessionid',
   'signature', 'credential',
 ];
-const EXACT = ['auth', 'pin', 'otp', 'card', 'pan', 'jwt', 'sid', 'codeverifier'];
+const EXACT = ['auth', 'pin', 'pwd', 'otp', 'card', 'pan', 'jwt', 'sid', 'codeverifier'];
 /** Also secret in a query string, where they are API keys and signed-URL signatures. */
-const URL_EXACT = ['key', 'sig', 'code', 'state'];
+const URL_EXACT = ['key', 'sig', 'code', 'state', 'session'];
 
 const normalize = (key: string) => key.toLowerCase().replace(/[^a-z0-9]/g, '');
 
