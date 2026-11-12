@@ -1,6 +1,6 @@
 {
   "name": "@zharp/node",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Zharp Application Monitoring for Node.js — traces, logs and errors, on OpenTelemetry",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
