@@ -108,6 +108,12 @@ export interface BrowserOptions {
    * `["warn", "error"]`. Default **off** — a page's console is mostly other people's libraries.
    */
   captureConsole?: boolean | Array<'debug' | 'log' | 'info' | 'warn' | 'error'>;
+  /**
+   * Send the page's logs: its `console` output, every level (or the levels `captureConsole`
+   * lists). Default **off**, as in every Zharp SDK. Errors, `Zharp.log`, traces, sessions and
+   * replays are sent either way. The same as `captureConsole: true`.
+   */
+  logs?: boolean;
   /** Spans for clicks that lead to requests. Default true. */
   interactions?: boolean;
   /**

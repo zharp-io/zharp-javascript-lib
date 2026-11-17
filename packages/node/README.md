@@ -37,7 +37,7 @@ node --import ./instrument.js server.js
 
 Loading it first is what makes it work: the instrumentations patch `http`, your framework and your database driver as they are first imported, so `init()` has to run before any of them are. With CommonJS, `node --require ./instrument.js server.js` does the same.
 
-With nothing but environment variables: `ZHARP_API_KEY=… ZHARP_SERVICE=checkout-api node --import @zharp/node/init server.js` (also `ZHARP_ENV`, `ZHARP_RELEASE`, `ZHARP_ENDPOINT`; `ZHARP_DISABLED=true` turns it off).
+With nothing but environment variables: `ZHARP_API_KEY=… ZHARP_SERVICE=checkout-api node --import @zharp/node/init server.js` (also `ZHARP_ENV`, `ZHARP_RELEASE`, `ZHARP_LOGS`; `ZHARP_DISABLED=true` turns it off).
 
 ### Next.js
 
@@ -60,7 +60,7 @@ The Edge runtime is not supported. If the build complains about OpenTelemetry mo
 |---|---|
 | **Requests** | A SERVER span per incoming request (`http.request.method`, `http.route` where the framework knows it, `http.response.status_code`; 5xx are errors), CLIENT spans for outgoing HTTP, and spans for database and cache calls. `dns`, `net` and `fs` are off — one span per lookup or file read is noise. |
 | **Traces from the browser** | The `traceparent` header continues the browser's trace; `session.id` and `enduser.id` from the `baggage` header are copied onto every span and log of that request. |
-| **Logs** | `Zharp.log.*`, `console.*` (default on), and pino, winston and bunyan through OpenTelemetry's log bridges — each with the trace and span it was written in. |
+| **Logs** | Every line the app prints during a request is stamped `trace_id=… span_id=…` (fields in JSON records), so the Zharp agent's copy of the app's output is linked to its request. With `logs: true` (`ZHARP_LOGS=true`) — for serverless or a host without the agent — the SDK sends them itself: `console.*`, pino, winston, bunyan and anything else printed, each with its trace and span. `Zharp.log.*` is always sent. |
 | **Errors** | `Zharp.captureError(err)` (handled), uncaught exceptions and unhandled rejections (unhandled). Sent as error logs with `exception.type`, `exception.message` and `exception.stacktrace`, grouped into issues. |
 
 ### Uncaught exceptions
@@ -77,7 +77,7 @@ What is waiting is sent when the event loop empties, and on SIGTERM/SIGINT (afte
 Zharp.init({ tracing: false });   // or ZHARP_TRACING=false
 ```
 
-Logs (`Zharp.log.*`, the console, pino, winston, bunyan), errors (with `exception.*` and the handled flag), the user, the session and tags are sent as usual. No spans are exported, nothing is instrumented except the log bridges and the incoming side of `http`, and no `traceparent` or `baggage` is added to outgoing requests. An incoming `traceparent` and `baggage` are still read, so a request's logs carry the caller's trace id, session and user (and `setUser()` inside a request stays with that request) — at the cost of one never-exported in-memory span per request. `Zharp.startSpan(name, fn)` just runs `fn`.
+Logs (`Zharp.log.*`, and with `logs: true` the console, pino, winston, bunyan), errors (with `exception.*` and the handled flag), the user, the session and tags are sent as usual. No spans are exported, nothing is instrumented except the log bridges and the incoming side of `http`, and no `traceparent` or `baggage` is added to outgoing requests. An incoming `traceparent` and `baggage` are still read, so a request's logs carry the caller's trace id, session and user (and `setUser()` inside a request stays with that request) — at the cost of one never-exported in-memory span per request. `Zharp.startSpan(name, fn)` just runs `fn`.
 
 ## API
 
@@ -103,7 +103,6 @@ Everything else is plain OpenTelemetry: `trace.getActiveSpan()`, `trace.getTrace
 | `service` | `ZHARP_SERVICE`, `OTEL_SERVICE_NAME`, package.json name | `service.name` |
 | `environment` | `ZHARP_ENV`, `NODE_ENV` | `deployment.environment.name` |
 | `release` | `ZHARP_RELEASE` | `service.version` |
-| `endpoint` | `https://api.zharp.io/api/v1/otlp` | |
 | `tracing` | `ZHARP_TRACING`, else `true` | `false` for logs only (see above). |
 | `sampleRate` | `1` | Fraction of new traces kept. A trace that arrives with a decision (from the browser) keeps it. Errors and logs are always sent. |
 | `logs` | `ZHARP_LOGS`, else `false` | Send what the app logs and prints. Off by default: where the Zharp agent reads the app's output it brings those lines in, linked by `logCorrelation`. Turn on for serverless or hosts without the agent. Errors, `Zharp.log` and traces are sent either way. |
@@ -115,7 +114,7 @@ Everything else is plain OpenTelemetry: `trace.getActiveSpan()`, `trace.getTrace
 | `extraInstrumentations` | `[]` | More OpenTelemetry instrumentations. |
 | `debug` | `false` | Print what OpenTelemetry is doing. |
 
-Traces and logs go as OTLP/protobuf, gzipped, to `{endpoint}/v1/traces` and `/v1/logs` with `Authorization: Bearer <key>`.
+Traces, errors and logs go straight to Zharp as OTLP/protobuf, gzipped.
 
 ## Readable stack traces
 

@@ -168,8 +168,8 @@ export class ZharpBrowser {
       }),
     );
     if (tracing && options.interactions !== false) t.push(watchClicks((label, selector) => tracer.noteClick(label, selector)));
-    if (options.captureConsole) {
-      const methods: ConsoleMethod[] = options.captureConsole === true ? ['debug', 'log', 'info', 'warn', 'error'] : options.captureConsole;
+    if (options.captureConsole || options.logs) {
+      const methods: ConsoleMethod[] = Array.isArray(options.captureConsole) ? options.captureConsole : ['debug', 'log', 'info', 'warn', 'error'];
       t.push(watchConsole(methods, (level, message) => this.emit(level, message, { 'log.source': 'console' })));
     }
     t.push(

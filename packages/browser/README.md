@@ -110,11 +110,11 @@ Logs, errors (uncaught and `captureError`, with their stacks), the user, the ses
 | `service` | `"web"` | `service.name`. |
 | `environment` | — | `deployment.environment.name`. |
 | `release` | — | `service.version`. Use the same value as your source maps' release. |
-| `endpoint` | `https://api.zharp.io/api/v1/otlp` | |
 | `tracingOrigins` | `[]` | See above. Same-origin requests are always included. |
 | `tracing` | `true` | `false` for logs only (see above). |
 | `sampleRate` | `1` | Fraction of traces kept. Errors, logs and replays are not sampled by it; the decision travels in `traceparent`, so the back end keeps or drops the same traces. |
 | `replay` | off | See above. |
+| `logs` | `false` | Send the page's console output (all levels, or those `captureConsole` lists). Errors, `Zharp.log`, traces and sessions are sent either way. |
 | `captureConsole` | `false` | `true` or a list of levels. |
 | `interactions` | `true` | Click spans. |
 | `ignoreUrls` | `[]` | URLs never traced, as strings (host or prefix) or RegExps. |
