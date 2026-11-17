@@ -65,13 +65,28 @@ export interface NodeOptions {
    */
   tracing?: boolean;
   /**
-   * Send `console.*` output as logs. Default **true**: on a server, the console is where most
+   * Send what the application logs — `console`, pino, winston, bunyan and everything else it
+   * prints. Default **false**: where the Zharp agent reads the app's output it already brings
+   * those lines in, linked to their requests by the ids stamped on them (see `logCorrelation`).
+   * Turn it on where nothing else collects the output (serverless, a plain VM without the
+   * agent). Falls back to `ZHARP_LOGS` (`true` turns it on). Errors, `Zharp.log` and traces are
+   * sent either way. `captureConsole` and `captureOutput` refine what is sent when this is on.
+   */
+  logs?: boolean;
+  /**
+   * Stamp the request's ids on every line printed during it — `trace_id=… span_id=…` at the end
+   * of a text line, two fields in a JSON record — so Zharp links the line to its request
+   * whichever way it arrives. Default **true**. Falls back to `ZHARP_LOG_CORRELATION`.
+   */
+  logCorrelation?: boolean;
+  /**
+   * With `logs` on: send `console.*` output as logs. Default **true**: on a server, the console is where most
    * logging already goes. pino, winston and bunyan are bridged by their instrumentations
    * whatever this says.
    */
   captureConsole?: boolean;
   /**
-   * Send everything else the process prints as logs too: whatever reaches stdout or stderr
+   * With `logs` on: send everything else the process prints as logs too: whatever reaches stdout or stderr
    * without going through `console` or a bridged library — NestJS's Logger, debug, log4js,
    * libraries writing to `process.stdout` directly. Default **true**. Each line keeps the
    * request it was printed in; its level is read from the line (a JSON record's `level`,

@@ -106,8 +106,10 @@ Everything else is plain OpenTelemetry: `trace.getActiveSpan()`, `trace.getTrace
 | `endpoint` | `https://api.zharp.io/api/v1/otlp` | |
 | `tracing` | `ZHARP_TRACING`, else `true` | `false` for logs only (see above). |
 | `sampleRate` | `1` | Fraction of new traces kept. A trace that arrives with a decision (from the browser) keeps it. Errors and logs are always sent. |
-| `captureConsole` | `true` | |
-| `captureOutput` | `ZHARP_CAPTURE_OUTPUT`, else `true` | Everything else printed to stdout/stderr: NestJS's Logger, debug, log4js, anything writing to `process.stdout`. Level read from the line; keeps the request it was printed in; never sends a line twice. |
+| `logs` | `ZHARP_LOGS`, else `false` | Send what the app logs and prints. Off by default: where the Zharp agent reads the app's output it brings those lines in, linked by `logCorrelation`. Turn on for serverless or hosts without the agent. Errors, `Zharp.log` and traces are sent either way. |
+| `logCorrelation` | `ZHARP_LOG_CORRELATION`, else `true` | Stamps `trace_id=… span_id=…` on each line printed during a request (fields in JSON records), so Zharp links it to the request. |
+| `captureConsole` | `true` | With `logs` on. |
+| `captureOutput` | `ZHARP_CAPTURE_OUTPUT`, else `true` | With `logs` on: everything else printed to stdout/stderr: NestJS's Logger, debug, log4js, anything writing to `process.stdout`. Level read from the line; keeps the request it was printed in; never sends a line twice. |
 | `captureUncaught` | `true` | |
 | `instrumentations` | | Per-instrumentation config for `getNodeAutoInstrumentations`, e.g. `{ '@opentelemetry/instrumentation-fs': { enabled: true } }`. |
 | `extraInstrumentations` | `[]` | More OpenTelemetry instrumentations. |

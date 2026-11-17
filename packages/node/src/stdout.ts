@@ -11,7 +11,7 @@
  * `LOG`/`WARN`/`ERROR`, or a level word such as `ERROR` or `[warn]`; failing that, stdout is
  * info and stderr is a warning.
  */
-import { context as otelContext, SeverityNumber, type Context, type Logger } from '@opentelemetry/api';
+import { context as otelContext, isSpanContextValid, SeverityNumber, trace, type Context, type Logger } from '@opentelemetry/api';
 import type { LogRecordProcessor, ReadWriteLogRecord } from '@opentelemetry/sdk-logs';
 import { alreadySent, isQuiet, quiet, rememberSent } from './capture-state';
 
@@ -181,4 +181,72 @@ export function captureOutput(logger: Logger): () => void {
   }
 
   return () => undo.forEach((fn) => fn());
+}
+
+/**
+ * The request's ids on every line printed during it: `… trace_id=<32 hex> span_id=<16 hex>` at
+ * the end of a text line, two fields in a JSON one. This is how a line someone else collects —
+ * the Zharp agent reading the container's output — is linked to its request without the SDK
+ * sending it. Lines printed outside a request, and lines that already carry a trace_id (pino and
+ * winston add theirs), are left alone. Returns the undo.
+ */
+export function stampOutput(): () => void {
+  const undo: Array<() => void> = [];
+  for (const stream of [process.stdout, process.stderr]) {
+    if (!stream || typeof stream.write !== 'function' || (stream.write as any).__zharpStamp) continue;
+    const original = stream.write;
+    const patched = function (this: unknown, chunk: unknown, encoding?: unknown, callback?: unknown) {
+      let out = chunk;
+      try {
+        out = stamped(chunk, encoding);
+      } catch {
+        // An unstamped line is better than a lost one.
+      }
+      return (original as any).call(this ?? stream, out, encoding, callback);
+    };
+    (patched as any).__zharpStamp = true;
+    stream.write = patched as typeof stream.write;
+    undo.push(() => { stream.write = original; });
+  }
+  return () => undo.forEach((fn) => fn());
+}
+
+function stamped(chunk: unknown, encoding: unknown): unknown {
+  const span = trace.getActiveSpan()?.spanContext();
+  if (!span || !isSpanContextValid(span)) return chunk;
+  const isBytes = chunk instanceof Uint8Array;
+  if (typeof chunk !== 'string' && !isBytes) return chunk;
+  const enc = typeof encoding === 'string' && Buffer.isEncoding(encoding) ? (encoding as BufferEncoding) : 'utf8';
+  if (isBytes && enc !== 'utf8') return chunk;
+  const text = isBytes ? Buffer.from(chunk as Uint8Array).toString('utf8') : (chunk as string);
+  if (!text.includes('\n')) return chunk;
+
+  const parts = text.split('\n');
+  let changed = false;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const next = stampLine(parts[i], span.traceId, span.spanId);
+    if (next !== parts[i]) {
+      parts[i] = next;
+      changed = true;
+    }
+  }
+  if (!changed) return chunk;
+  const joined = parts.join('\n');
+  return isBytes ? Buffer.from(joined, 'utf8') : joined;
+}
+
+export function stampLine(line: string, traceId: string, spanId: string): string {
+  const cr = line.endsWith('\r') ? '\r' : '';
+  const body = cr ? line.slice(0, -1) : line;
+  const trimmed = body.trimEnd();
+  if (!trimmed.trim() || body.includes('trace_id') || body.includes('[Zharp]')) return line;
+  if (trimmed.endsWith('}')) {
+    // A JSON record gets fields; the tail of a record written in pieces is left as it is.
+    if (!trimmed.trimStart().startsWith('{')) return line;
+    const close = trimmed.lastIndexOf('}');
+    const inner = trimmed.slice(trimmed.indexOf('{') + 1, close).trim();
+    const fields = `"trace_id":"${traceId}","span_id":"${spanId}"`;
+    return `${trimmed.slice(0, close)}${inner ? ',' : ''}${fields}}${body.slice(trimmed.length)}${cr}`;
+  }
+  return `${trimmed} trace_id=${traceId} span_id=${spanId}${body.slice(trimmed.length)}${cr}`;
 }

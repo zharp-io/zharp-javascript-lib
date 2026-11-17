@@ -313,7 +313,7 @@ const text = (key, path) => byKey(key, path).map((r) => r.text).join('\n');
 
 console.log('\n@zharp/node (node-app.mjs, preloaded with --import)');
 {
-  const app = await run(nodeArgs('node-app.mjs'), { TEST_KEY: 'node-key' });
+  const app = await run(nodeArgs('node-app.mjs'), { TEST_KEY: 'node-key', ZHARP_LOGS: 'true' });
   check('one activation line', () => {
     assert.match(app.out, /\[Zharp\] Application monitoring active — service "node-test", environment "test"/);
   });
@@ -375,7 +375,7 @@ console.log('\n@zharp/node: no key');
 
 console.log('\n@zharp/node: ZHARP_TRACING=false (node-logs-only.mjs)');
 {
-  const app = await run(nodeArgs('node-logs-only.mjs'), { TEST_KEY: 'node-logs-only', ZHARP_TRACING: 'false' });
+  const app = await run(nodeArgs('node-logs-only.mjs'), { TEST_KEY: 'node-logs-only', ZHARP_TRACING: 'false', ZHARP_LOGS: 'true' });
   assert.ok(app.result, app.err);
   const logs = text('node-logs-only', '/v1/logs');
   check('activation line says logs only', () => {
@@ -406,7 +406,7 @@ console.log('\n@zharp/node: ZHARP_TRACING=false (node-logs-only.mjs)');
 
 console.log('\n@zharp/node: captureOutput (node-output.mjs)');
 {
-  const app = await run(nodeArgs('node-output.mjs'), { TEST_KEY: 'node-output' });
+  const app = await run(nodeArgs('node-output.mjs'), { TEST_KEY: 'node-output', ZHARP_LOGS: 'true' });
   assert.ok(app.result, app.err);
   const logs = text('node-output', '/v1/logs');
   const count = (s) => logs.split(s).length - 1;
@@ -436,6 +436,41 @@ console.log('\n@zharp/node: captureOutput (node-output.mjs)');
   check('the app still prints every line itself', () => {
     for (const s of ['nest-marker order placed', 'json-marker', 'split-marker joined', 'console-marker once']) assert.ok(app.out.includes(s), s);
     assert.ok(app.err.includes('stderr-marker'));
+  });
+}
+
+console.log('\n@zharp/node: logs off by default, lines stamped (node-output.mjs)');
+{
+  const app = await run(nodeArgs('node-output.mjs'), { TEST_KEY: 'node-stamp' });
+  assert.ok(app.result, app.err);
+  const logs = text('node-stamp', '/v1/logs');
+  check('nothing the app prints is sent when logs are off', () => {
+    for (const s of ['nest-marker', 'json-marker', 'split-marker', 'stderr-marker', 'console-marker', 'outside-marker']) assert.ok(!logs.includes(s), s);
+  });
+  const id = '5bf92f3577b34da6a3ce929d0e0e4736';
+  check('text lines printed in a request end with its trace_id and span_id', () => {
+    for (const s of ['nest-marker order placed', 'split-marker joined', 'console-marker once']) {
+      const line = app.out.split('\n').find((l) => l.includes(s));
+      assert.match(line, new RegExp(`${s}.* trace_id=${id} span_id=[0-9a-f]{16}$`), line);
+    }
+    assert.match(app.err.split('\n').find((l) => l.includes('stderr-marker')), new RegExp(`trace_id=${id}`));
+  });
+  check('a JSON record gets the ids as fields and stays valid JSON', () => {
+    const line = app.out.split('\n').find((l) => l.includes('json-marker'));
+    const record = JSON.parse(line);
+    assert.equal(record.trace_id, id);
+    assert.match(record.span_id, /^[0-9a-f]{16}$/);
+  });
+  check('lines outside a request are printed unchanged', () => {
+    const line = app.out.split('\n').find((l) => l.includes('outside-marker'));
+    assert.equal(line, 'outside-marker no newline');
+  });
+}
+{
+  const app = await run(nodeArgs('node-output.mjs'), { TEST_KEY: 'node-nostamp', ZHARP_LOG_CORRELATION: 'false' });
+  check('ZHARP_LOG_CORRELATION=false: no line is stamped', () => {
+    assert.ok(app.result, app.err);
+    assert.ok(!app.out.includes('trace_id=') && !app.err.includes('trace_id='));
   });
 }
 

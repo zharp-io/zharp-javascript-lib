@@ -46,7 +46,7 @@ import { withBodyCapture } from './bodies';
 import { UrlRedactionSpanProcessor } from './urls';
 import { ContextLogProcessor, ContextSpanProcessor, ContextStore, userAttributes } from './context';
 import { captureConsole } from './console';
-import { captureOutput, SentLineProcessor } from './stdout';
+import { captureOutput, SentLineProcessor, stampOutput } from './stdout';
 import { DebugIdLogProcessor, DebugIdSpanProcessor } from './debug-ids';
 import { asError, exceptionAttributes, SEVERITY, type Level } from './errors';
 import type { Attributes, NodeOptions, ZharpUser } from './types';
@@ -119,6 +119,11 @@ export class ZharpNode {
     const endpoint = (pick(options.endpoint, nodeEnv('ZHARP_ENDPOINT')) ?? DEFAULT_ENDPOINT).replace(/\/+$/, '');
     const tracing = tracingEnabled(options.tracing);
     this.tracing = tracing;
+    // What the app prints is sent only when asked for: where the Zharp agent reads the
+    // container's output it already brings those lines in, linked by the stamp below.
+    const sendLogs = switchOn(options.logs, 'ZHARP_LOGS', false);
+    const correlation = switchOn(options.logCorrelation, 'ZHARP_LOG_CORRELATION', true);
+    const bridges = logBridges(sendLogs, correlation, options.instrumentations);
 
     if (options.debug) {
       // Bound to the console as it is now, before the bridge patches it: OpenTelemetry's own
@@ -189,21 +194,26 @@ export class ZharpNode {
               '@opentelemetry/instrumentation-net': { enabled: false },
               '@opentelemetry/instrumentation-fs': { enabled: false },
               ...options.instrumentations,
+              ...bridges,
               ...(bodies && {
                 '@opentelemetry/instrumentation-http': withBodyCapture(bodies, options.instrumentations?.['@opentelemetry/instrumentation-http'] as any) as any,
               }),
             })
-          : logsOnlyInstrumentations(options)),
+          : logsOnlyInstrumentations({ ...options, instrumentations: { ...options.instrumentations, ...bridges } })),
         ...(options.extraInstrumentations ?? []),
       ],
     });
     this.sdk.start();
     this.logger = logs.getLogger('@zharp/node', VERSION);
 
-    if (options.captureConsole !== false) this.teardowns.push(captureConsole(this.logger));
-    // Last, so it wraps whatever the console capture and the bridges print.
-    if (options.captureOutput !== false && nodeEnv('ZHARP_CAPTURE_OUTPUT') !== 'false') {
-      this.teardowns.push(captureOutput(this.logger));
+    if (correlation) this.teardowns.push(stampOutput());
+    if (sendLogs) {
+      if (options.captureConsole !== false) this.teardowns.push(captureConsole(this.logger));
+      // Last, so it wraps whatever the console capture and the bridges print — and sees each
+      // line before it is stamped.
+      if (options.captureOutput !== false && nodeEnv('ZHARP_CAPTURE_OUTPUT') !== 'false') {
+        this.teardowns.push(captureOutput(this.logger));
+      }
     }
     if (options.captureUncaught !== false) this.teardowns.push(this.captureProcessErrors());
     this.teardowns.push(this.flushOnExit());
@@ -464,6 +474,33 @@ function registerEsmHook(): void {
  * `tracing` from the option, else `ZHARP_TRACING` (`false`, `0`, `no`, `off` turn it off).
  * On unless one of them says otherwise.
  */
+/** An on/off setting: the option if given, else the environment variable, else the default. */
+function switchOn(option: boolean | undefined, variable: string, fallback: boolean): boolean {
+  if (typeof option === 'boolean') return option;
+  const value = nodeEnv(variable);
+  if (value && /^(true|1|yes|on)$/i.test(value)) return true;
+  if (value && /^(false|0|no|off)$/i.test(value)) return false;
+  return fallback;
+}
+
+/**
+ * pino, winston and bunyan: their records are sent only when logs are on; either way each record
+ * carries trace_id and span_id (unless correlation is off), so a line collected from the output
+ * is still linked to its request. The application's own settings for them win.
+ */
+function logBridges(sendLogs: boolean, correlation: boolean, own: NodeOptions['instrumentations'] = {}) {
+  const config = (name: string) => ({
+    disableLogSending: !sendLogs,
+    disableLogCorrelation: !correlation,
+    ...(own as Record<string, object>)[name],
+  });
+  return {
+    '@opentelemetry/instrumentation-pino': config('@opentelemetry/instrumentation-pino'),
+    '@opentelemetry/instrumentation-winston': config('@opentelemetry/instrumentation-winston'),
+    '@opentelemetry/instrumentation-bunyan': config('@opentelemetry/instrumentation-bunyan'),
+  } as Record<string, any>;
+}
+
 function tracingEnabled(option: boolean | undefined): boolean {
   if (typeof option === 'boolean') return option;
   const value = nodeEnv('ZHARP_TRACING');
