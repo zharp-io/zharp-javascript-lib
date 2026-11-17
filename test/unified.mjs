@@ -461,6 +461,13 @@ console.log('\n@zharp/node: logs off by default, lines stamped (node-output.mjs)
     assert.equal(record.trace_id, id);
     assert.match(record.span_id, /^[0-9a-f]{16}$/);
   });
+  check('a multi-line record written at once gets one stamp, at the end of its last line', () => {
+    const lines = app.err.split('\n');
+    const start = lines.findIndex((l) => l.includes('stack-marker boom'));
+    assert.ok(start >= 0, app.err);
+    assert.ok(!lines[start].includes('trace_id') && !lines[start + 1].includes('trace_id'));
+    assert.match(lines[start + 2], new RegExp(`at next \\(app\\.js:2:2\\) trace_id=${id} span_id=[0-9a-f]{16}$`));
+  });
   check('lines outside a request are printed unchanged', () => {
     const line = app.out.split('\n').find((l) => l.includes('outside-marker'));
     assert.equal(line, 'outside-marker no newline');

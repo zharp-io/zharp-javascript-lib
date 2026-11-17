@@ -222,8 +222,17 @@ function stamped(chunk: unknown, encoding: unknown): unknown {
   if (!text.includes('\n')) return chunk;
 
   const parts = text.split('\n');
+  // One write is one record: a stack trace printed by console.log(error) or NestJS's Logger
+  // spans many lines, and the agent joins it into one entry read for the stamp at its end. So
+  // text gets one stamp, on its last line; JSON lines are records of their own and each gets
+  // its fields.
+  let last = -1;
+  for (let i = parts.length - 2; i >= 0; i--) {
+    if (parts[i].trim()) { last = i; break; }
+  }
   let changed = false;
   for (let i = 0; i < parts.length - 1; i++) {
+    if (i !== last && !parts[i].trimStart().startsWith('{')) continue;
     const next = stampLine(parts[i], span.traceId, span.spanId);
     if (next !== parts[i]) {
       parts[i] = next;

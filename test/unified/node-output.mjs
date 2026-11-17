@@ -19,6 +19,8 @@ const server = http.createServer((req, res) => {
   process.stderr.write('stderr-marker something odd\n');
   // console: sent by the console capture, not a second time by the output capture.
   console.log('console-marker once');
+  // A stack trace in one write: one record, stamped once at its end.
+  console.error('stack-marker boom\n    at handler (app.js:1:1)\n    at next (app.js:2:2)');
   res.end('ok');
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
