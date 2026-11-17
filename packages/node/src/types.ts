@@ -71,6 +71,16 @@ export interface NodeOptions {
    */
   captureConsole?: boolean;
   /**
+   * Send everything else the process prints as logs too: whatever reaches stdout or stderr
+   * without going through `console` or a bridged library — NestJS's Logger, debug, log4js,
+   * libraries writing to `process.stdout` directly. Default **true**. Each line keeps the
+   * request it was printed in; its level is read from the line (a JSON record's `level`,
+   * NestJS's `LOG`/`WARN`/`ERROR`, a word such as `ERROR`), else info on stdout and warn on
+   * stderr. A line another capture already sent is not sent again. `false` (or
+   * `ZHARP_CAPTURE_OUTPUT=false`) turns it off.
+   */
+  captureOutput?: boolean;
+  /**
    * Request and response bodies on HTTP spans — incoming requests and outgoing http/https
    * calls. Default **off**. `'errors'` (or `true`) keeps them for failed requests only (status
    * 400 and above); `'all'` for every request. Falls back to `ZHARP_CAPTURE_BODIES`

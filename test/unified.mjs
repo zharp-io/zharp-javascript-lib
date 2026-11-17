@@ -404,6 +404,41 @@ console.log('\n@zharp/node: ZHARP_TRACING=false (node-logs-only.mjs)');
   });
 }
 
+console.log('\n@zharp/node: captureOutput (node-output.mjs)');
+{
+  const app = await run(nodeArgs('node-output.mjs'), { TEST_KEY: 'node-output' });
+  assert.ok(app.result, app.err);
+  const logs = text('node-output', '/v1/logs');
+  const count = (s) => logs.split(s).length - 1;
+  check('lines printed without console arrive: NestJS, JSON, raw stdout, stderr, split writes', () => {
+    for (const s of ['nest-marker order placed', 'nest-error-marker payment failed', 'json-marker from a JSON logger', 'split-marker joined', 'stderr-marker something odd', 'outside-marker no newline']) {
+      assert.ok(logs.includes(s), s);
+    }
+  });
+  check("NestJS lines lose the colour codes and prefix; the context is kept as log.logger", () => {
+    assert.ok(!logs.includes('[Nest] 61') && !logs.includes('\u001b['));
+    assert.ok(logs.includes('log.logger') && logs.includes('OrdersService'));
+  });
+  check('levels come from the line: NestJS ERROR, JSON level 50 and stderr are not info', () => {
+    assert.ok(logs.includes('ERROR') && logs.includes('WARN'));
+  });
+  check('a console line is sent once, not again by the output capture', () => {
+    assert.equal(count('console-marker once'), 1);
+  });
+  check('no line is sent twice', () => {
+    for (const s of ['nest-marker order placed', 'json-marker', 'split-marker joined', 'stderr-marker']) assert.equal(count(s), 1, s);
+  });
+  check("lines printed in a request carry that request's trace id", () => {
+    const traceId = Buffer.from('5bf92f3577b34da6a3ce929d0e0e4736', 'hex');
+    const withNest = byKey('node-output', '/v1/logs').filter((r) => r.text.includes('nest-marker'));
+    assert.ok(withNest.length && withNest.every((r) => r.raw.includes(traceId)));
+  });
+  check('the app still prints every line itself', () => {
+    for (const s of ['nest-marker order placed', 'json-marker', 'split-marker joined', 'console-marker once']) assert.ok(app.out.includes(s), s);
+    assert.ok(app.err.includes('stderr-marker'));
+  });
+}
+
 // ── captureBodies ────────────────────────────────────────────────────────────
 
 console.log('\n@zharp/browser: captureBodies (browser-bodies.mjs)');

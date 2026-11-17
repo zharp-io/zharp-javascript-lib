@@ -7,6 +7,7 @@
  */
 import { format } from 'node:util';
 import { SeverityNumber, type Logger } from '@opentelemetry/api';
+import { quiet } from './capture-state';
 
 const LEVELS: Array<[method: 'log' | 'info' | 'warn' | 'error' | 'debug' | 'trace', severity: SeverityNumber, text: string]> = [
   ['debug', SeverityNumber.DEBUG, 'DEBUG'],
@@ -33,7 +34,8 @@ export function captureConsole(logger: Logger): () => void {
     if (typeof original !== 'function' || (original as any).__zharp) continue;
     originals.set(method, original);
     const patched = function (this: unknown, ...args: unknown[]) {
-      original.apply(this ?? console, args);
+      // Printed under quiet: the output capture would otherwise send the same line again.
+      quiet(() => original.apply(this ?? console, args));
       if (emitting) return;
       emitting = true;
       try {

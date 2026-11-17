@@ -107,6 +107,7 @@ Everything else is plain OpenTelemetry: `trace.getActiveSpan()`, `trace.getTrace
 | `tracing` | `ZHARP_TRACING`, else `true` | `false` for logs only (see above). |
 | `sampleRate` | `1` | Fraction of new traces kept. A trace that arrives with a decision (from the browser) keeps it. Errors and logs are always sent. |
 | `captureConsole` | `true` | |
+| `captureOutput` | `ZHARP_CAPTURE_OUTPUT`, else `true` | Everything else printed to stdout/stderr: NestJS's Logger, debug, log4js, anything writing to `process.stdout`. Level read from the line; keeps the request it was printed in; never sends a line twice. |
 | `captureUncaught` | `true` | |
 | `instrumentations` | | Per-instrumentation config for `getNodeAutoInstrumentations`, e.g. `{ '@opentelemetry/instrumentation-fs': { enabled: true } }`. |
 | `extraInstrumentations` | `[]` | More OpenTelemetry instrumentations. |

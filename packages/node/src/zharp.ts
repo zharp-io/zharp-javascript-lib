@@ -46,6 +46,7 @@ import { withBodyCapture } from './bodies';
 import { UrlRedactionSpanProcessor } from './urls';
 import { ContextLogProcessor, ContextSpanProcessor, ContextStore, userAttributes } from './context';
 import { captureConsole } from './console';
+import { captureOutput, SentLineProcessor } from './stdout';
 import { DebugIdLogProcessor, DebugIdSpanProcessor } from './debug-ids';
 import { asError, exceptionAttributes, SEVERITY, type Level } from './errors';
 import type { Attributes, NodeOptions, ZharpUser } from './types';
@@ -146,6 +147,7 @@ export class ZharpNode {
         ]
       : [new ContextSpanProcessor(this.store)];
     this.logProcessors = [
+      new SentLineProcessor(),
       new ContextLogProcessor(this.store),
       new DebugIdLogProcessor(),
       new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ ...exporterOptions, url: `${endpoint}/v1/logs` }) }),
@@ -199,6 +201,10 @@ export class ZharpNode {
     this.logger = logs.getLogger('@zharp/node', VERSION);
 
     if (options.captureConsole !== false) this.teardowns.push(captureConsole(this.logger));
+    // Last, so it wraps whatever the console capture and the bridges print.
+    if (options.captureOutput !== false && nodeEnv('ZHARP_CAPTURE_OUTPUT') !== 'false') {
+      this.teardowns.push(captureOutput(this.logger));
+    }
     if (options.captureUncaught !== false) this.teardowns.push(this.captureProcessErrors());
     this.teardowns.push(this.flushOnExit());
 
