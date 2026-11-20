@@ -110,6 +110,20 @@ export interface NodeOptions {
    */
   captureBodies?: CaptureBodies;
   /**
+   * Request and response headers on HTTP spans (`http.request.header.user-agent`, …), incoming
+   * and outgoing. Default **on**. Secret headers — `authorization`, `cookie`, `set-cookie`, API
+   * keys, tokens, and any name matching the body key rules — are recorded as `[Filtered]`: you
+   * see that one was sent, never its value. Add names to `redact` to filter more. `false` (or
+   * `ZHARP_CAPTURE_HEADERS=false`) turns it off.
+   */
+  captureHeaders?: boolean | { redact?: Array<string | RegExp> };
+  /**
+   * Failed database queries reported as errors, with the line of your code that ran the query
+   * as their stack, the statement, and the driver's code (Postgres 23505 → `UniqueViolation`).
+   * Default true.
+   */
+  captureQueryErrors?: boolean;
+  /**
    * Capture uncaught exceptions and unhandled rejections. Default true. The process still
    * exits as Node would have, once they have been sent.
    */

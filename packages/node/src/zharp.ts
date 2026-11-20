@@ -10,6 +10,7 @@
 import { register as registerLoader } from 'node:module';
 import {
   type Context,
+  context,
   type DiagLogger,
   DiagLogLevel,
   diag,
@@ -43,6 +44,9 @@ import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentation
 import { announce, describeTarget, disabledByEnv, nodeEnv, packageName, pick, warn } from '@zharp/internal/env';
 import { bodySettings } from '@zharp/internal/bodies';
 import { withBodyCapture } from './bodies';
+import { headerSettings, withHeaderCapture } from './headers';
+import { DbDriverErrorsInstrumentation, DbErrorSpanProcessor, reportOf, type DbFailure } from './db-errors';
+import { FrameworkErrorsInstrumentation, RecordedExceptionsProcessor } from './framework-errors';
 import { UrlRedactionSpanProcessor } from './urls';
 import { ContextLogProcessor, ContextSpanProcessor, ContextStore, userAttributes } from './context';
 import { captureConsole } from './console';
@@ -70,6 +74,8 @@ export class ZharpNode {
   private tracing = true;
   /** Errors already sent, so one that is both rejected and then thrown is reported once. */
   private readonly reported = new WeakSet<object>();
+  /** Failed queries waiting to be reported, once and with their call site. */
+  private dbErrors: DbErrorSpanProcessor | null = null;
 
   /** `Zharp.log.info("Order placed", { orderId })` — and debug, warn, error, fatal, trace. */
   readonly log: Record<Level, LogFn> = {
@@ -143,9 +149,18 @@ export class ZharpNode {
     const exporterOptions = { headers, compression: 'gzip' as any };
     // Logs only: no span exporter at all. The context processor stays, because it is what keeps
     // a user set with setUser() to its own request (see RecordOnlySampler).
+    const queryErrors = tracing && switchOn(options.captureQueryErrors, 'ZHARP_CAPTURE_QUERY_ERRORS', true);
+    this.dbErrors = queryErrors ? new DbErrorSpanProcessor((failure) => this.sendQueryError(failure, true, "error", { "zharp.mechanism": "db" })) : null;
     this.spanProcessors = tracing
       ? [
           new ContextSpanProcessor(this.store),
+          // Before the database processor: a request that failed claims its query's error first.
+          ...(options.captureUncaught !== false
+            ? [new RecordedExceptionsProcessor((error, spanContext, mechanism) =>
+                context.with(trace.setSpanContext(context.active(), spanContext), () => this.report(error, false, 'error', { 'zharp.mechanism': mechanism }, true)))]
+            : []),
+          // Before the exporter: it keeps the query's scrubbed exception off the span.
+          ...(this.dbErrors ? [this.dbErrors] : []),
           new UrlRedactionSpanProcessor(),
           new DebugIdSpanProcessor(),
           new BatchSpanProcessor({ exporter: new OTLPTraceExporter({ ...exporterOptions, url: `${endpoint}/v1/traces` }) }),
@@ -173,6 +188,10 @@ export class ZharpNode {
       propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
     });
     const bodies = bodySettings(options.captureBodies, nodeEnv('ZHARP_CAPTURE_BODIES'));
+    const headerCapture = headerSettings(options.captureHeaders, nodeEnv('ZHARP_CAPTURE_HEADERS'));
+    const ownHttp = options.instrumentations?.['@opentelemetry/instrumentation-http'] as any;
+    const withBodies = bodies ? withBodyCapture(bodies, ownHttp) : ownHttp;
+    const httpConfig = headerCapture ? withHeaderCapture(headerCapture, withBodies) : withBodies;
     const rate = typeof options.sampleRate === 'number' ? Math.min(1, Math.max(0, options.sampleRate)) : 1;
 
     this.sdk = new NodeSDK({
@@ -195,11 +214,13 @@ export class ZharpNode {
               '@opentelemetry/instrumentation-fs': { enabled: false },
               ...options.instrumentations,
               ...bridges,
-              ...(bodies && {
-                '@opentelemetry/instrumentation-http': withBodyCapture(bodies, options.instrumentations?.['@opentelemetry/instrumentation-http'] as any) as any,
-              }),
+              ...(httpConfig && { '@opentelemetry/instrumentation-http': httpConfig as any }),
             })
           : logsOnlyInstrumentations({ ...options, instrumentations: { ...options.instrumentations, ...bridges } })),
+        ...(this.dbErrors ? [new DbDriverErrorsInstrumentation((traceId, error) => this.dbErrors?.attach(traceId, error))] : []),
+        ...(tracing && options.captureUncaught !== false
+          ? [new FrameworkErrorsInstrumentation((error, mechanism) => this.report(error, false, 'error', { 'zharp.mechanism': mechanism }, true))]
+          : []),
         ...(options.extraInstrumentations ?? []),
       ],
     });
@@ -336,14 +357,22 @@ export class ZharpNode {
     }
   }
 
-  private report(value: unknown, handled: boolean, level: Level, attributes?: Attributes): void {
+  private report(value: unknown, handled: boolean, level: Level, attributes?: Attributes, fromFramework = false): void {
     try {
       if (!this.logger) return;
-      const error = asError(value);
-      if (value && typeof value === 'object') {
-        if (this.reported.has(value)) return;
-        this.reported.add(value);
+      if (value && typeof value === 'object' && this.reported.has(value)) return;
+      // A failed query's error: sent as the query's failure — your code's call site, the
+      // statement, the code — not as the driver's socket stack.
+      const traceId = trace.getActiveSpan()?.spanContext().traceId;
+      const failure = this.dbErrors?.consume(traceId, value, fromFramework);
+      if (failure) {
+        if (value && typeof value === 'object') this.reported.add(value);
+        this.sendQueryError(failure, handled, level, attributes);
+        if (!handled) trace.getActiveSpan()?.setStatus({ code: SpanStatusCode.ERROR, message: failure.error?.message ?? 'The query failed' });
+        return;
       }
+      const error = asError(value);
+      if (value && typeof value === 'object') this.reported.add(value);
       const exception = exceptionAttributes(error, handled);
       this.logger.emit({
         severityNumber: SEVERITY[level] as SeverityNumber,
@@ -355,6 +384,34 @@ export class ZharpNode {
       if (!handled) trace.getActiveSpan()?.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
     } catch {
       // As above.
+    }
+  }
+
+  /** A failed query as an error, in the query's own span so the error shows the query. */
+  private sendQueryError(failure: DbFailure, handled: boolean, level: Level = 'error', attributes?: Attributes): void {
+    try {
+      if (!this.logger) return;
+      if (failure.error) {
+        if (this.reported.has(failure.error) && handled) return;
+        this.reported.add(failure.error);
+      }
+      const report = reportOf(failure);
+      this.logger.emit({
+        severityNumber: SEVERITY[level] as SeverityNumber,
+        severityText: level.toUpperCase(),
+        body: `${report.type}: ${report.message}`,
+        attributes: {
+          ...report.attributes,
+          ...(attributes as any),
+          'exception.type': report.type,
+          'exception.message': report.message,
+          'exception.stacktrace': report.stack,
+          'zharp.handled': handled ? 'true' : 'false',
+        },
+        context: trace.setSpanContext(context.active(), report.spanContext),
+      });
+    } catch {
+      // Never throw into the application.
     }
   }
 

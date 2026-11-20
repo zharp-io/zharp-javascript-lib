@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r build && node test/run.mjs && node test/unified.mjs && node test/readable-stacks.mjs",
+    "test": "pnpm -r build && node test/run.mjs && node test/unified.mjs && node test/readable-stacks.mjs && node test/query-errors.mjs",
     "test:e2e": "node test/e2e/run.mjs"
   },
   "devDependencies": {
