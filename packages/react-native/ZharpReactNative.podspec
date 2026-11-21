@@ -4,8 +4,10 @@ package = JSON.parse(File.read(File.join(__dir__, "package.json")))
 
 # @zharp/react-native's iOS side: Zharp for iOS (crashes, hangs) under the app's JavaScript.
 # Zharp for iOS is a Swift package; React Native 0.75+ pulls it in through spm_dependency.
+# The pod's name has no hyphen: React Native's SPM support moves the pod's module map and rewrites
+# references to it by the pod's name, which must then be the module's name too.
 Pod::Spec.new do |s|
-  s.name         = "zharp-react-native"
+  s.name         = "ZharpReactNative"
   s.version      = package["version"]
   s.summary      = package["description"]
   s.homepage     = package["homepage"]

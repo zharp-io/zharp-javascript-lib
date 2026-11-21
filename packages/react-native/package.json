@@ -28,7 +28,7 @@
     "android/build.gradle",
     "android/src",
     "ios",
-    "zharp-react-native.podspec"
+    "ZharpReactNative.podspec"
   ],
   "scripts": {
     "build": "tsup",
