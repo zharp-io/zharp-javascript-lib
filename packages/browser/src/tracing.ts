@@ -206,7 +206,7 @@ export class Tracer {
   }
 
   /** A page load or navigation: ends whatever root and interaction were open, and starts the new root. */
-  startRoot(type: 'pageload' | 'navigation', path: string, attributes: Record<string, unknown>, startTime?: number): IdleSpan {
+  startRoot(type: 'pageload' | 'navigation' | 'screen', path: string, attributes: Record<string, unknown>, startTime?: number): IdleSpan {
     this.interaction?.finish();
     this.root?.finish();
     const span = this.startSpan(`${type} ${path}`, Kind.Internal, null, startTime);

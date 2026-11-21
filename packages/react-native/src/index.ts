@@ -5,6 +5,6 @@
  *     Zharp.init({ key: 'zpk_…', service: 'shop-app' });
  */
 export { Zharp } from './instance';
-export { ZharpReactNative, type ZharpSpan } from './client';
-export { ZharpErrorBoundary, type ZharpErrorBoundaryProps } from './react';
+export { ZharpReactNative, type ZharpSpan, type NavigationRef } from './client';
+export { ZharpErrorBoundary, useZharpNavigation, type ZharpErrorBoundaryProps } from './react';
 export type { ReactNativeOptions, Attributes, ZharpUser } from './types';

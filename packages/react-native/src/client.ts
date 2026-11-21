@@ -28,6 +28,13 @@ const SEVERITY = { trace: 1, debug: 5, info: 9, warn: 13, error: 17, fatal: 21 }
 type Level = keyof typeof SEVERITY;
 type LogFn = (message: unknown, attributes?: Attributes) => void;
 
+/** What trackNavigation needs of a navigation container ref (React Navigation, Expo Router). */
+export interface NavigationRef {
+  getCurrentRoute?: () => { name?: string } | undefined;
+  isReady?: () => boolean;
+  addListener?: (event: 'state', listener: () => void) => () => void;
+}
+
 export interface ZharpSpan {
   readonly traceId: string;
   readonly spanId: string;
@@ -75,6 +82,8 @@ function deviceAttributes(): Record<string, unknown> {
 export class ZharpReactNative {
   private running: Running | null = null;
   private user: ZharpUser | null = null;
+  /** The screen on show (`app.screen.name`), from trackScreen / trackNavigation. */
+  private screen: string | null = null;
   private readonly tags: Record<string, unknown> = {};
   /** Errors already reported, so one caught by the app and then rethrown is sent once. */
   private readonly reported = new WeakSet<object>();
@@ -255,6 +264,55 @@ export class ZharpReactNative {
     });
   }
 
+  /**
+   * The screen on show changed: a `screen <name>` span that lasts until the screen's requests are
+   * done, and `app.screen.name` on everything recorded meanwhile. trackNavigation calls it for you.
+   */
+  trackScreen(name: string): void {
+    safely(() => {
+      const running = this.running;
+      if (!running || !name || name === this.screen) return;
+      this.screen = name;
+      running.session.touch();
+      if (running.tracing) running.tracer.startRoot('screen', name, { 'app.screen.name': name });
+    });
+  }
+
+  /**
+   * Screens from React Navigation or Expo Router: pass the navigation container's ref
+   * (`createNavigationContainerRef()` / `useNavigationContainerRef()`, or Expo Router's
+   * `useNavigationContainerRef()`). Each route the app shows becomes a screen. Returns a function
+   * that stops following it.
+   */
+  trackNavigation(ref: NavigationRef | null | undefined): () => void {
+    let stopped = false;
+    let unsubscribe: (() => void) | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const current = () => {
+      if (!stopped) safely(() => {
+        const name = ref?.getCurrentRoute?.()?.name;
+        if (name) this.trackScreen(String(name));
+      });
+    };
+    // The container may not be ready yet: wait for it (the first screen), then follow its state.
+    let tries = 0;
+    const attach = () => {
+      if (stopped || !ref) return;
+      if (ref.isReady?.() === false && tries++ < 100) {
+        timer = setTimeout(attach, 100);
+        return;
+      }
+      current();
+      unsubscribe = safely(() => ref.addListener?.('state', current)) ?? undefined;
+    };
+    attach();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      unsubscribe?.();
+    };
+  }
+
   /** An attribute on every span and log from now on. `null` removes it. */
   setTag(key: string, value: string | number | boolean | null | undefined): void {
     if (value === null || value === undefined) delete this.tags[key];
@@ -343,6 +401,7 @@ export class ZharpReactNative {
     const user = this.user;
     return {
       ...this.tags,
+      'app.screen.name': this.screen ?? undefined,
       'session.id': this.currentSession(),
       'enduser.id': user ? String(user.id) : undefined,
       'enduser.email': user?.email,

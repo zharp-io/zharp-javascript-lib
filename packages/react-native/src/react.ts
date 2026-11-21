@@ -6,8 +6,19 @@
  *       <App />
  *     </ZharpErrorBoundary>
  */
-import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Component, useEffect, type ErrorInfo, type ReactNode } from 'react';
+import type { NavigationRef } from './client';
 import { Zharp } from './instance';
+
+/**
+ * Screens from React Navigation or Expo Router, for as long as the component is mounted:
+ *
+ *     const ref = useNavigationContainerRef();   // from @react-navigation/native or expo-router
+ *     useZharpNavigation(ref);
+ */
+export function useZharpNavigation(ref: NavigationRef | null | undefined): void {
+  useEffect(() => Zharp.trackNavigation(ref), [ref]);
+}
 
 export interface ZharpErrorBoundaryProps {
   children?: ReactNode;

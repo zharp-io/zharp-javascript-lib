@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import type { Project } from './detect';
 import type { Connected } from './connect';
 import { morePlanFor, type Command } from './recipes-more';
+import { reactNativePlanFor } from './recipes-rn';
 
 export interface Change {
   path: string;
@@ -345,7 +346,7 @@ function basePlanFor(project: Project, c: Connected, api: string): Plan | null {
     case 'nestjs':
       return nestjs(project, c, api);
     default:
-      return morePlanFor(project, c, api);
+      return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api);
   }
 }
 
