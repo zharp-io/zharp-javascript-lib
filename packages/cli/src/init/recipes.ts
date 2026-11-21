@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Project } from './detect';
 import type { Connected } from './connect';
+import { morePlanFor, type Command } from './recipes-more';
 
 export interface Change {
   path: string;
@@ -33,13 +34,16 @@ export interface Plan {
   manual: Manual[];
   /** Said at the end: what to set up elsewhere (CI). */
   notes: string[];
+  /** Installs outside npm: pip, composer, go get. Run after the files are written. */
+  commands?: Command[];
 }
 
 export const DEFAULT_API = 'https://api.zharp.io';
 
 const read = (dir: string, path: string): string | null => {
   try {
-    return readFileSync(join(dir, path), 'utf8');
+    // Worked on with \n line endings; a file that had \r\n gets them back (see planFor).
+    return readFileSync(join(dir, path), 'utf8').replace(/\r\n/g, '\n');
   } catch {
     return null;
   }
@@ -319,6 +323,20 @@ function nestjs(project: Project, c: Connected, api: string): Plan {
 }
 
 export function planFor(project: Project, c: Connected, api: string): Plan | null {
+  const plan = basePlanFor(project, c, api);
+  // Edited files keep their own line endings: \r\n where they had them (Windows, django-admin).
+  for (const ch of plan?.changes ?? []) {
+    if (ch.kind !== 'edit') continue;
+    try {
+      if (readFileSync(join(project.dir, ch.path), 'utf8').includes('\r\n')) ch.content = ch.content.replace(/\r?\n/g, '\r\n');
+    } catch {
+      // A file that went away: written as it is.
+    }
+  }
+  return plan;
+}
+
+function basePlanFor(project: Project, c: Connected, api: string): Plan | null {
   switch (project.framework) {
     case 'nextjs':
       return nextjs(project, c, api);
@@ -327,7 +345,7 @@ export function planFor(project: Project, c: Connected, api: string): Plan | nul
     case 'nestjs':
       return nestjs(project, c, api);
     default:
-      return null;
+      return morePlanFor(project, c, api);
   }
 }
 

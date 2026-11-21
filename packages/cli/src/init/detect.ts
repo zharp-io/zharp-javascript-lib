@@ -67,7 +67,12 @@ export function detect(dir: string): Project {
   }
   const composer = read(join(dir, 'composer.json'));
   if (composer && /laravel\/framework/.test(composer)) return { ...base, name: basename(dir), framework: 'laravel', label: 'Laravel', platform: 'php' };
-  if (existsSync(join(dir, 'go.mod'))) return { ...base, name: basename(dir), framework: 'go', label: 'Go', platform: 'go' };
+  const goMod = read(join(dir, 'go.mod'));
+  if (goMod !== null) {
+    const router = /github\.com\/gin-gonic\/gin/.test(goMod) ? ' (Gin)' : /github\.com\/labstack\/echo/.test(goMod) ? ' (Echo)' : '';
+    const moduleName = /^module\s+(\S+)/m.exec(goMod)?.[1]?.split('/').pop();
+    return { ...base, name: moduleName || basename(dir), framework: 'go', label: `Go${router}`, platform: 'go' };
+  }
   if (pkg) return { ...base, framework: 'node', label: 'Node.js', platform: 'node' };
   return { ...base, framework: 'unknown', label: 'an unknown project', platform: 'otel' };
 }
