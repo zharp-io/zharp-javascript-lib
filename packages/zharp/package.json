@@ -1,0 +1,29 @@
+{
+  "name": "zharp",
+  "version": "0.1.0",
+  "description": "npx zharp init — connect your project to Zharp and set up error tracking, tracing and logs in one step",
+  "bin": {
+    "zharp": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@zharp/cli": "workspace:^"
+  },
+  "keywords": ["zharp", "apm", "error-tracking", "monitoring", "setup", "cli"],
+  "license": "MIT",
+  "homepage": "https://zharp.io/docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zharp-io/zharp-javascript-lib.git",
+    "directory": "packages/zharp"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

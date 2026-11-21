@@ -1,6 +1,6 @@
 {
   "name": "@zharp/nextjs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "withZharp(nextConfig): readable stack traces for Next.js — debug IDs and source map upload on next build",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

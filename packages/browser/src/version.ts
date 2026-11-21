@@ -1,2 +1,2 @@
 /** Sent as `telemetry.sdk.version`. Bumped with package.json. */
-export const VERSION = '0.3.0';
+export const VERSION = '0.4.0';

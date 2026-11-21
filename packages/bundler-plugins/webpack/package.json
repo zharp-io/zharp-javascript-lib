@@ -1,6 +1,6 @@
 {
   "name": "@zharp/webpack-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zharp webpack plugin: inject debug IDs and upload source maps on production builds",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
