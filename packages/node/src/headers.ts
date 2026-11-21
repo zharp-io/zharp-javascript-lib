@@ -1,58 +1,17 @@
 /**
- * Request and response headers on HTTP spans, as OpenTelemetry names them
- * (`http.request.header.user-agent`, `http.response.header.content-type`), so a failed request
- * shows what was sent and what came back — and, as importantly, what wasn't sent (a request
- * with no `authorization` header). Every secret header is recorded as `[Filtered]`: it was
- * sent, its value never leaves the process. Same key rules as request bodies.
+ * Request and response headers on Node's HTTP spans, server and client. The rules — names,
+ * secrets as `[Filtered]`, caps — are shared with the browser SDK (@zharp/internal/headers).
  */
-import { ClientRequest, IncomingMessage, ServerResponse, type IncomingHttpHeaders, type OutgoingHttpHeaders } from 'node:http';
+import { ClientRequest, IncomingMessage, ServerResponse } from 'node:http';
 import type { Span } from '@opentelemetry/api';
-import { FILTERED, isSecretKey } from '@zharp/internal/bodies';
+import { headerAttributes, type HeaderSettings } from '@zharp/internal/headers';
+
+export { headerAttributes, headerSettings, type HeaderSettings } from '@zharp/internal/headers';
 
 type HttpConfig = {
   applyCustomAttributesOnSpan?: (span: Span, request: ClientRequest | IncomingMessage, response: IncomingMessage | ServerResponse) => void;
   [key: string]: unknown;
 };
-
-export interface HeaderSettings {
-  /** More header names to treat as secret (names or patterns). */
-  redact: Array<string | RegExp>;
-}
-
-/** Headers that are secret whatever the key rules say. */
-const SECRET = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-api-key', 'x-auth-token', 'x-csrf-token', 'x-xsrf-token']);
-/** Per side, so a request stuffed with headers can't fill the span. */
-const MAX_HEADERS = 40;
-const MAX_VALUE = 512;
-
-/** Header settings from the option and ZHARP_CAPTURE_HEADERS; null when turned off. */
-export function headerSettings(option: boolean | { redact?: Array<string | RegExp> } | undefined, env?: string): HeaderSettings | null {
-  if (option === false || env === 'false' || env === '0') return null;
-  return { redact: typeof option === 'object' && option?.redact ? option.redact : [] };
-}
-
-/** A header's value as it is recorded: secrets filtered, long values cut, repeats joined. */
-function shown(name: string, value: unknown, settings: HeaderSettings): string | null {
-  if (value === undefined || value === null) return null;
-  if (SECRET.has(name) || isSecretKey(name, settings.redact)) return FILTERED;
-  const text = Array.isArray(value) ? value.join(', ') : String(value);
-  return text.length > MAX_VALUE ? `${text.slice(0, MAX_VALUE)}…` : text;
-}
-
-/** `http.<side>.header.<name>` attributes for a set of headers. */
-export function headerAttributes(side: 'request' | 'response', headers: IncomingHttpHeaders | OutgoingHttpHeaders, settings: HeaderSettings): Record<string, string> {
-  const out: Record<string, string> = {};
-  let count = 0;
-  for (const [rawName, value] of Object.entries(headers ?? {})) {
-    if (count >= MAX_HEADERS) break;
-    const name = rawName.toLowerCase();
-    const text = shown(name, value, settings);
-    if (text === null) continue;
-    out[`http.${side}.header.${name}`] = text;
-    count++;
-  }
-  return out;
-}
 
 /** The http instrumentation's config with headers recorded on every request span, server and client. */
 export function withHeaderCapture(settings: HeaderSettings, config: HttpConfig = {}): HttpConfig {

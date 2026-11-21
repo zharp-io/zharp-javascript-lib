@@ -129,6 +129,14 @@ export interface BrowserOptions {
    *     captureBodies: { mode: 'all', redactKeys: ['dateOfBirth'], maxSize: 4096 }
    */
   captureBodies?: CaptureBodies;
+  /**
+   * Request and response headers on fetch/XHR spans (`http.request.header.*`,
+   * `http.response.header.*`), so a failed request shows what was sent and what came back.
+   * Default **on**. Secret headers (`authorization`, `cookie`, API keys, tokens…) are recorded as
+   * `[Filtered]`. The browser only lets a page read the response headers the server exposes
+   * (CORS). `false` turns it off; `{ redact: ['x-tenant'] }` filters more names.
+   */
+  captureHeaders?: boolean | { redact?: Array<string | RegExp> };
   /** URLs never traced (no span, no headers), e.g. analytics beacons. */
   ignoreUrls?: Array<string | RegExp>;
   /** Minutes without activity before a new session starts. Default 30. */

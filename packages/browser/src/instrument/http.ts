@@ -6,6 +6,7 @@
  * third party may refuse. Every request still gets a span; the SDK's own requests get neither.
  */
 import { bodyAttributes, describedAttributes, fileLabel, isTextual, rawLimit, redactUrl, wanted, type BodySettings } from '@zharp/internal/bodies';
+import { headerAttributes, parseHeaderBlock, type HeaderSettings } from '@zharp/internal/headers';
 import { Kind, Status, type Span, type Tracer } from '../tracing';
 import { now, safely } from '../util';
 
@@ -19,6 +20,8 @@ export interface HttpHooks {
   baggage(): string;
   /** `captureBodies`, or null when it is off. */
   bodies: BodySettings | null;
+  /** `captureHeaders`, or null when it is off. */
+  headers?: HeaderSettings | null;
   /** Whether a URL's bodies may be captured (the app's own APIs unless `captureBodies.urls` says otherwise). */
   shouldCaptureBodies(url: string): boolean;
 }
@@ -205,6 +208,15 @@ export function instrumentFetch(hooks: HttpHooks): () => void {
       }) ?? init;
     }
 
+    // Headers as they go out (the trace headers included) and as they come back.
+    const headers = hooks.headers;
+    if (headers) {
+      safely(() => {
+        const sentHeaders = new Headers(nextInit?.headers ?? (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined));
+        request.span.setAttributes(headerAttributes('request', sentHeaders, headers));
+      });
+    }
+
     const readBodies = (response?: Response): BodyReader | undefined =>
       bodies
         ? (status) => {
@@ -230,6 +242,7 @@ export function instrumentFetch(hooks: HttpHooks): () => void {
 
     return original.call(this, input, nextInit).then(
       (response: Response) => {
+        if (headers) safely(() => request.span.setAttributes(headerAttributes('response', response.headers, headers)));
         safely(() => request.done(response.status, undefined, readBodies(response)));
         return response;
       },
@@ -253,7 +266,7 @@ export function instrumentXhr(hooks: HttpHooks): () => void {
   const { open, send, setRequestHeader } = proto;
 
   proto.open = function (method: string, url: string | URL, ...rest: unknown[]) {
-    this.__zharp = { method: String(method || 'GET').toUpperCase(), url: String(url), traceparent: false, baggage: null };
+    this.__zharp = { method: String(method || 'GET').toUpperCase(), url: String(url), traceparent: false, baggage: null, headers: [] };
     return open.call(this, method, url, ...rest);
   };
 
@@ -263,6 +276,7 @@ export function instrumentXhr(hooks: HttpHooks): () => void {
     // XHR headers cannot be read back, so what the caller sets is noted as it is set.
     if (state && lower === 'traceparent') state.traceparent = true;
     if (state && lower === 'content-type') state.contentType = String(value);
+    if (state && !state.own) state.headers.push([String(name), String(value)]);
     if (state && lower === 'baggage' && !state.own) {
       state.baggage = value;
       return; // sent merged with ours in send()
@@ -287,6 +301,17 @@ export function instrumentXhr(hooks: HttpHooks): () => void {
       });
       const bodies = hooks.bodies && hooks.shouldCaptureBodies(state.url) ? hooks.bodies : null;
       const xhr = this as XMLHttpRequest;
+      const headers = hooks.headers;
+      if (headers) {
+        safely(() => {
+          // What the caller set (baggage merged with ours), and the trace headers sent with it.
+          const sent: Array<[string, string]> = state.headers.filter(([n]: [string, string]) => n.toLowerCase() !== 'baggage');
+          if (state.own && !state.traceparent) sent.push(['traceparent', request.span.traceparent]);
+          const baggage = state.own ? (hooks.baggage() ? mergeBaggage(state.baggage, hooks.baggage()) : state.baggage) : state.baggage;
+          if (baggage) sent.push(['baggage', baggage]);
+          request.span.setAttributes(headerAttributes('request', sent, headers));
+        });
+      }
       const reader: BodyReader | undefined = bodies
         ? (status) => {
             if (!wanted(bodies, status)) return undefined;
@@ -312,7 +337,10 @@ export function instrumentXhr(hooks: HttpHooks): () => void {
             return { ...attributes, ...(sentAttributes as Attrs) };
           }
         : undefined;
-      this.addEventListener('loadend', () => safely(() => request.done(this.status, undefined, reader)));
+      this.addEventListener('loadend', () => {
+        if (headers) safely(() => request.span.setAttributes(headerAttributes('response', parseHeaderBlock(xhr.getAllResponseHeaders()), headers)));
+        safely(() => request.done(this.status, undefined, reader));
+      });
     } else if (state.baggage) {
       safely(() => setRequestHeader.call(this, 'baggage', state.baggage));
     }
