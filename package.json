@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r build && node test/run.mjs && node test/unified.mjs && node test/readable-stacks.mjs && node test/query-errors.mjs && node test/source-context.mjs && node test/init.mjs && node test/init-style.mjs && node test/init-nest.mjs && node test/init-more.mjs",
+    "test": "pnpm -r build && node test/run.mjs && node test/unified.mjs && node test/readable-stacks.mjs && node test/query-errors.mjs && node test/source-context.mjs && node test/init.mjs && node test/init-style.mjs && node test/init-nest.mjs && node test/init-more.mjs && node test/source-bundle.mjs",
     "test:e2e": "node test/e2e/run.mjs"
   },
   "devDependencies": {

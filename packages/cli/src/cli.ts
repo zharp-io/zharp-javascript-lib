@@ -30,6 +30,8 @@ Options:
   --release <r>       Release name to file the upload under (or ZHARP_RELEASE)
   --include <glob>    Only these files (repeatable; sourcemaps)
   --exclude <glob>    Not these files (repeatable; sourcemaps)
+  --sources <dir>     The project whose sources go with the symbols (dart-symbols, dsym; default: found)
+  --no-sources        Don't upload the app's sources (errors then show code only from a linked repo)
   --delete-after      Delete .map files after uploading them
   --dry-run           Show what would happen; change and send nothing
   --url <url>         Zharp API (default ZHARP_URL or https://api.zharp.io)
@@ -55,6 +57,8 @@ async function main(argv: string[]): Promise<void> {
       release: { type: 'string' },
       uuid: { type: 'string' },
       'obfuscation-map': { type: 'string' },
+      sources: { type: 'string' },
+      'no-sources': { type: 'boolean' },
       include: { type: 'string', multiple: true },
       exclude: { type: 'string', multiple: true },
       'delete-after': { type: 'boolean' },
@@ -117,11 +121,13 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case 'dart-symbols upload': {
-      await uploadDartSymbols(needTarget('the --split-debug-info directory'), connect(), { release, dryRun, logger, obfuscationMap: values['obfuscation-map'] });
+      const sources = values['no-sources'] ? false : values.sources;
+      await uploadDartSymbols(needTarget('the --split-debug-info directory'), connect(), { release, dryRun, logger, obfuscationMap: values['obfuscation-map'], sources });
       return;
     }
     case 'dsym upload': {
-      await uploadDsyms(needTarget('a .dSYM bundle or a folder of them'), connect(), { release, dryRun, logger });
+      const sources = values['no-sources'] ? false : values.sources;
+      await uploadDsyms(needTarget('a .dSYM bundle or a folder of them'), connect(), { release, dryRun, logger, sources });
       return;
     }
     default:
