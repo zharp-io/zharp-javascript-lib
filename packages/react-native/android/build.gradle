@@ -27,5 +27,5 @@ repositories {
 dependencies {
     implementation 'com.facebook.react:react-android'
     // The native SDK; an app can pin another version with ext.zharpAndroidVersion.
-    implementation "io.zharp:android:${safeExtGet('zharpAndroidVersion', '1.2.0')}"
+    implementation "io.zharp:android:${safeExtGet('zharpAndroidVersion', '1.3.0')}"
 }

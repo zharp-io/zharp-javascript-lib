@@ -23,6 +23,6 @@ Pod::Spec.new do |s|
   # ZHARP_IOS_BRANCH: build against a branch of zharp-ios-lib (testing an unreleased version).
   requirement = ENV["ZHARP_IOS_BRANCH"] ?
     { kind: "branch", branch: ENV["ZHARP_IOS_BRANCH"] } :
-    { kind: "upToNextMajorVersion", minimumVersion: "0.5.0" }
+    { kind: "upToNextMajorVersion", minimumVersion: "0.4.0" }
   spm_dependency(s, url: "https://github.com/zharp-io/zharp-ios-lib.git", requirement: requirement, products: ["Zharp"])
 end
