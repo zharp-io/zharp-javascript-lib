@@ -38,6 +38,8 @@ export interface ReactNativeOptions {
   logs?: boolean;
   /** With `logs`: which console methods. Default all. */
   captureConsole?: boolean | Array<'debug' | 'log' | 'info' | 'warn' | 'error'>;
+  /** Print what the native SDK does (`[Zharp] …` in Logcat / the Xcode console). Default off. */
+  debug?: boolean;
   /** Minutes in the background or idle before a new session. Default 30. */
   sessionTimeoutMinutes?: number;
 }

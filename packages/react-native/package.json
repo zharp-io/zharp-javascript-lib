@@ -21,7 +21,11 @@
   },
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "android/build.gradle",
+    "android/src",
+    "ios",
+    "zharp-react-native.podspec"
   ],
   "scripts": {
     "build": "tsup",

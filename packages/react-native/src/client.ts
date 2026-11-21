@@ -14,10 +14,11 @@ import { asError, exceptionAttributes, watchConsole, type ConsoleMethod } from '
 import { instrumentXhr, matches, type HttpHooks } from '../../browser/src/instrument/http';
 import { Session, type SessionStore } from '../../browser/src/session';
 import { Kind, Status, Tracer, type Span } from '../../browser/src/tracing';
-import { Exporter, type Endpoint } from '../../browser/src/transport';
+import { Exporter, post, retryable, type Endpoint } from '../../browser/src/transport';
 import { keyValues, now, safely, safeString, toNanos } from '../../browser/src/util';
 import type { Attributes, ZharpUser } from '../../browser/src/types';
 import { watchGlobalErrors } from './errors';
+import { nativeModule, type ZharpNativeModule } from './native';
 import type { ReactNativeOptions } from './types';
 import { VERSION } from './version';
 
@@ -36,6 +37,11 @@ export interface ZharpSpan {
 
 interface Running {
   options: ReactNativeOptions;
+  endpoint: Endpoint;
+  /** The export envelope around log records: resource and scope. */
+  wrapLogs: (records: unknown[]) => unknown;
+  /** The native SDK underneath, when the app has the module (not in Expo Go). */
+  native: ZharpNativeModule | null;
   session: Session;
   tracer: Tracer;
   tracing: boolean;
@@ -88,7 +94,14 @@ export class ZharpReactNative {
 
   /** The current session's ID, e.g. to show on a support screen. */
   get sessionId(): string | undefined {
-    return this.running?.session.id;
+    return this.currentSession();
+  }
+
+  /** The native SDK's session when it runs (one session for JS errors and native crashes), else ours. */
+  private currentSession(): string | undefined {
+    const running = this.running;
+    if (!running) return undefined;
+    return (running.native ? safely(() => running.native!.sessionId()) : null) || running.session.id;
   }
 
   init(options: ReactNativeOptions): void {
@@ -117,6 +130,26 @@ export class ZharpReactNative {
     const session = new Session((options.sessionTimeoutMinutes ?? 30) * 60_000, memoryStore());
     if (this.user) session.update({ user: this.user });
 
+    // The native SDK first: native crashes and ANRs from now on, and the one session both sides use.
+    const native = nativeModule();
+    if (native) {
+      safely(() =>
+        native.start({
+          key: options.key,
+          service,
+          environment: options.environment ?? null,
+          release: options.release ?? null,
+          endpoint: options.endpoint ? endpointUrl : null,
+          tracingOrigins: (options.tracingOrigins ?? []).filter((o): o is string => typeof o === 'string'),
+          tracing: options.tracing !== false,
+          captureHeaders: options.captureHeaders !== false,
+          debug: !!options.debug,
+        }),
+      );
+      if (this.user) safely(() => native.setUser(String(this.user!.id), this.user!.email ?? null, this.user!.name ?? null));
+      for (const [k, v] of Object.entries(this.tags)) safely(() => native.setTag(k, String(v)));
+    }
+
     const resource = keyValues({
       'service.name': service,
       'service.version': options.release,
@@ -132,9 +165,10 @@ export class ZharpReactNative {
     const spans = new Exporter<unknown>(endpoint, 'traces', (records) => ({
       resourceSpans: [{ resource: { attributes: resource }, scopeSpans: [{ scope, spans: records }] }],
     }));
-    const logs = new Exporter<unknown>(endpoint, 'logs', (records) => ({
+    const wrapLogs = (records: unknown[]) => ({
       resourceLogs: [{ resource: { attributes: resource }, scopeLogs: [{ scope, logRecords: records }] }],
-    }));
+    });
+    const logs = new Exporter<unknown>(endpoint, 'logs', wrapLogs);
 
     const tracer = new Tracer({
       export: (span) => {
@@ -146,8 +180,10 @@ export class ZharpReactNative {
     tracer.sampleRate = typeof options.sampleRate === 'number' ? Math.min(1, Math.max(0, options.sampleRate)) : 1;
 
     const tracing = options.tracing !== false;
-    const running: Running = { options, session, tracer, tracing, spans, logs, teardowns: [] };
+    const running: Running = { options, endpoint, wrapLogs, native, session, tracer, tracing, spans, logs, teardowns: [] };
     this.running = running;
+    // Fatal JS errors from earlier runs, saved as the app died: sent first.
+    if (native) this.sendSavedFatal(running);
 
     const ignore = options.ignoreUrls ?? [];
     const tracingOrigins = options.tracingOrigins ?? [];
@@ -168,8 +204,11 @@ export class ZharpReactNative {
     if (tracing) t.push(instrumentXhr(httpHooks));
     t.push(
       watchGlobalErrors((error, mechanism, fatal) => {
-        this.report(error, false, { 'zharp.mechanism': mechanism, ...(fatal ? { 'zharp.fatal': 'true' } : {}) });
-        // A fatal error ends the JS runtime: what is queued goes now (phase 2 saves it to disk first).
+        const attributes = { 'zharp.mechanism': mechanism, ...(fatal ? { 'zharp.fatal': 'true' } : {}) };
+        // A fatal error ends the app: with the native module it goes to disk now and is sent on
+        // the next launch (sent once — not also from the queue, which may or may not get out).
+        if (fatal && native) this.saveFatal(running, error, attributes);
+        else this.report(error, false, attributes);
         if (fatal) this.flush();
       }),
     );
@@ -199,6 +238,11 @@ export class ZharpReactNative {
     safely(() => {
       this.user = user && user.id !== undefined && user.id !== null && user.id !== '' ? { id: user.id, email: user.email, name: user.name } : null;
       this.running?.session.update({ user: this.user });
+      const native = this.running?.native;
+      if (native) {
+        if (this.user) native.setUser(String(this.user.id), this.user.email ?? null, this.user.name ?? null);
+        else native.clearUser();
+      }
     });
   }
 
@@ -207,6 +251,7 @@ export class ZharpReactNative {
     safely(() => {
       this.user = null;
       this.running?.session.renew(null);
+      this.running?.native?.clearUser();
     });
   }
 
@@ -214,6 +259,7 @@ export class ZharpReactNative {
   setTag(key: string, value: string | number | boolean | null | undefined): void {
     if (value === null || value === undefined) delete this.tags[key];
     else this.tags[key] = value;
+    safely(() => this.running?.native?.setTag(key, value === null || value === undefined ? null : String(value)));
   }
 
   /** Report an error you caught. Sent as handled, and grouped into an issue with its other occurrences. */
@@ -297,7 +343,7 @@ export class ZharpReactNative {
     const user = this.user;
     return {
       ...this.tags,
-      'session.id': running?.session.id,
+      'session.id': this.currentSession(),
       'enduser.id': user ? String(user.id) : undefined,
       'enduser.email': user?.email,
       'enduser.name': user?.name,
@@ -306,7 +352,7 @@ export class ZharpReactNative {
 
   private baggage(): string {
     const parts: string[] = [];
-    const session = this.running?.session.id;
+    const session = this.currentSession();
     if (session) parts.push(`session.id=${encodeURIComponent(session)}`);
     if (this.user) parts.push(`enduser.id=${encodeURIComponent(String(this.user.id))}`);
     return parts.join(',');
@@ -316,6 +362,13 @@ export class ZharpReactNative {
     safely(() => {
       const running = this.running;
       if (!running) return;
+      running.logs.add(this.record(running, level, message, attributes, exception));
+    });
+  }
+
+  /** One OTLP log record, with the session, user, tags and the active span. */
+  private record(running: Running, level: Level, message: unknown, attributes?: Attributes, exception?: Record<string, string>): unknown {
+    {
       running.session.touch();
       const span = running.tracer.activeSpan();
       const time = toNanos(now());
@@ -327,7 +380,7 @@ export class ZharpReactNative {
           this.reported.add(value);
         } else attrs[key] = value;
       }
-      running.logs.add({
+      return {
         timeUnixNano: time,
         observedTimeUnixNano: time,
         severityNumber: SEVERITY[level],
@@ -336,8 +389,33 @@ export class ZharpReactNative {
         attributes: keyValues({ ...attrs, ...exception }),
         traceId: span?.traceId,
         spanId: span?.spanId,
-      });
+      };
+    }
+  }
+
+  /** A fatal JS error, written to disk by the native module before the app dies. */
+  private saveFatal(running: Running, value: unknown, attributes: Attributes): void {
+    safely(() => {
+      if (value && typeof value === 'object') {
+        if (this.reported.has(value)) return;
+        this.reported.add(value);
+      }
+      const exception = exceptionAttributes(asError(value), false);
+      const record = this.record(running, 'fatal', `${exception['exception.type']}: ${exception['exception.message']}`, attributes, exception);
+      const body = JSON.stringify(running.wrapLogs([record]));
+      // If it can't be written, it is sent the ordinary way and may or may not get out.
+      if (!running.native!.saveFatal(body)) running.logs.add(record);
     });
+  }
+
+  /** Fatal JS errors saved by earlier runs: sent now; one that can't be sent yet is saved again. */
+  private sendSavedFatal(running: Running): void {
+    const saved = safely(() => running.native!.takeFatal()) ?? [];
+    for (const body of saved) {
+      post(running.endpoint, 'logs', body).then((status) => {
+        if (retryable(status)) safely(() => running.native!.saveFatal(body));
+      });
+    }
   }
 
   private report(value: unknown, handled: boolean, attributes?: Attributes): void {
