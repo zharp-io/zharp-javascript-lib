@@ -22,6 +22,9 @@ export const xcrun: XcodeTool = (tool, args, input) => {
  */
 const SWIFT = /\$s[0-9A-Za-z_$]{3,}/g;
 
+/** What swift-demangle calls data symbols (metadata, descriptors, records), not code. */
+const NOT_CODE = /^(type metadata(?! accessor)|full type metadata|(nominal type|protocol|protocol conformance|associated (type|conformance)|method|property|module|extension|anonymous|reflection metadata|opaque type) descriptor|reflection metadata|protocol (requirements base|witness table)(?! accessor)|value witness table|field offset|enum case for|lazy cache variable|demangling cache variable|flag for loading|metaclass for|class metadata base offset|objc metaclass|type metadata (pattern|completion|instantiation cache)|generic (type|protocol witness table) (instantiation cache|pattern))/;
+
 /** The mangled Swift names in a DWARF file (read as bytes; no tools needed). */
 export function mangledNamesIn(data: Buffer): Set<string> {
   return new Set(data.toString('latin1').match(SWIFT) ?? []);
@@ -49,7 +52,8 @@ export function swiftNames(
   const out: Record<string, string> = {};
   mangled.forEach((name, i) => {
     const readable = lines[i]?.trim();
-    if (readable && readable !== name) out[name] = readable;
+    // Descriptors and metadata records are data, never a frame: left out, the map is smaller.
+    if (readable && readable !== name && !NOT_CODE.test(readable)) out[name] = readable;
   });
   return out;
 }
