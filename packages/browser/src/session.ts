@@ -37,12 +37,23 @@ function newState(user: ZharpUser | null = null): SessionState {
   return { id, started: time, lastActive: time, user };
 }
 
+/** Where the session is kept: the tab's sessionStorage on the web, the device on mobile. */
+export interface SessionStore {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+}
+
+const tabStorage: SessionStore = {
+  get: (key) => sessionStorage.getItem(key),
+  set: (key, value) => sessionStorage.setItem(key, value),
+};
+
 export class Session {
   private state: SessionState;
   private lastWrite = 0;
   private readonly listeners: Array<(state: SessionState) => void> = [];
 
-  constructor(private readonly timeoutMs: number) {
+  constructor(private readonly timeoutMs: number, private readonly store: SessionStore = tabStorage) {
     const stored = this.read();
     this.state = stored && Date.now() - stored.lastActive < timeoutMs ? stored : newState(stored?.user);
     this.write();
@@ -84,7 +95,7 @@ export class Session {
 
   private read(): SessionState | null {
     try {
-      const raw = sessionStorage.getItem(STORAGE_KEY);
+      const raw = this.store.get(STORAGE_KEY);
       const parsed = raw ? JSON.parse(raw) : null;
       return parsed && typeof parsed.id === 'string' && typeof parsed.lastActive === 'number' ? parsed : null;
     } catch {
@@ -95,7 +106,7 @@ export class Session {
   private write(): void {
     this.lastWrite = Date.now();
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+      this.store.set(STORAGE_KEY, JSON.stringify(this.state));
     } catch {
       // In memory only.
     }
