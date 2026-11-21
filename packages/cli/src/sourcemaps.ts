@@ -87,7 +87,7 @@ export function injectDirectory(dir: string, options: InjectOptions = {}): Injec
     const injected = injectCode(code, { stripSourceMappingUrl: options.stripSourceMappingUrl });
     let map;
     try {
-      map = injectMap(readFileSync(source.map, 'utf8'), injected.debugId);
+      map = injectMap(readFileSync(source.map, "utf8"), injected.debugId, source.map);
     } catch (error) {
       logger.warn(`Skipped ${source.name}: ${source.mapName} is not a readable source map (${(error as Error).message}).`);
       continue;

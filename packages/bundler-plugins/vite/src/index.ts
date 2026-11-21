@@ -40,8 +40,20 @@ export function zharp(options: ZharpPluginOptions = {}) {
       if (config.build?.sourcemap) return null;
       return { build: { sourcemap: 'hidden' } };
     },
-    configResolved(config: ResolvedConfig): void {
+    async configResolved(config: ResolvedConfig): Promise<void> {
       enabled = !options.disabled && config.command === 'build' && (config.mode === 'production' || options.force === true);
+      if (!enabled) return;
+      // Vite keeps .env files to itself (only VITE_* reach the app): ZHARP_AUTH_TOKEN and ZHARP_URL
+      // written there by `zharp init` are read the way Vite reads them.
+      try {
+        // The app's own Vite (this package doesn't depend on it).
+        const viteModule = 'vite';
+        const vite: any = await import(viteModule);
+        const env: Record<string, string> = vite.loadEnv?.(config.mode, config.root, 'ZHARP_') ?? {};
+        for (const [key, value] of Object.entries(env)) if (process.env[key] === undefined) process.env[key] = value;
+      } catch {
+        // Not loadable here: the environment has to carry them.
+      }
     },
     async writeBundle(output: OutputOptions, bundle: Record<string, unknown>): Promise<void> {
       if (!enabled) return;

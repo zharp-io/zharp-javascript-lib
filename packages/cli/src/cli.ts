@@ -9,10 +9,13 @@ import { consoleLogger } from './log';
 import { uploadDartSymbols, uploadDsyms, uploadProguard } from './native';
 import { injectDirectory, uploadSourcemaps } from './sourcemaps';
 import { VERSION } from './version';
+import { runInit } from './init';
 
 const HELP = `zharp ${VERSION} — readable stack traces for Zharp
 
 Usage:
+  zharp init                                            Connect this project to Zharp and set it up
+        [--yes] [--dry-run]                             (signs in through the browser)
   zharp sourcemaps inject <dir>                         Add debug IDs to JS files and their maps
   zharp sourcemaps upload <dir> --app <id>              Upload JS files and their maps
         [--release <r>] [--delete-after]
@@ -55,6 +58,8 @@ async function main(argv: string[]): Promise<void> {
       exclude: { type: 'string', multiple: true },
       'delete-after': { type: 'boolean' },
       'dry-run': { type: 'boolean' },
+      yes: { type: 'boolean', short: 'y' },
+      tarballs: { type: 'string' },
       url: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
@@ -67,6 +72,10 @@ async function main(argv: string[]): Promise<void> {
   const [group, command, target] = positionals;
   if (values.help || !group) {
     console.log(HELP);
+    return;
+  }
+  if (group === 'init') {
+    process.exitCode = await runInit({ url: values.url, yes: values.yes === true, dryRun: values['dry-run'] === true, tarballs: values.tarballs, dir: command });
     return;
   }
   const logger = consoleLogger();

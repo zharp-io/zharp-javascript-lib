@@ -7,6 +7,9 @@
  * `globalThis.__zharpDebugIds` to know which build each file in a stack came from.
  */
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const DEBUG_ID_COMMENT = '//# debugId=';
 const DEBUG_ID_PATTERN = /^\/\/# debugId=([0-9a-fA-F-]{36})\s*$/m;
@@ -124,12 +127,82 @@ export function withoutSourceMappingUrl(code: string): string {
  * The source map with the debug ID in it, under both spellings in use (`debugId` from the TC39
  * proposal, `debug_id` from earlier tooling). Returns the text unchanged when it already matches.
  */
-export function injectMap(mapText: string, debugId: string): { text: string; changed: boolean; hasSourcesContent: boolean } {
+export function injectMap(mapText: string, debugId: string, mapPath?: string): { text: string; changed: boolean; hasSourcesContent: boolean } {
   const map = JSON.parse(mapText);
   if (!map || typeof map !== 'object') throw new Error('not a source map');
+  // The build machine has the sources: the app's own files go into the map, so the code shows.
+  const filled = mapPath ? fillSourcesContent(map, mapPath) : 0;
   const hasSourcesContent = Array.isArray(map.sourcesContent) && map.sourcesContent.some((s: unknown) => typeof s === 'string');
-  if (map.debugId === debugId && map.debug_id === debugId) return { text: mapText, changed: false, hasSourcesContent };
+  if (!filled && map.debugId === debugId && map.debug_id === debugId) return { text: mapText, changed: false, hasSourcesContent };
   map.debugId = debugId;
   map.debug_id = debugId;
   return { text: JSON.stringify(map), changed: true, hasSourcesContent };
+}
+
+const MAX_SOURCE_BYTES = 1_000_000;
+
+/** A map source's path on this machine, for the bundlers' ways of naming them. */
+export function sourcePathCandidates(source: string, mapPath: string, sourceRoot = ''): string[] {
+  const mapDir = dirname(mapPath);
+  // turbopack:///[project]/app/page.tsx, webpack://_N_E/./app/page.tsx, webpack:///src/x.ts, file:///abs
+  let stripped = source;
+  let projectRelative = false;
+  if (/^turbopack:\/\/\/\[project\]\//.test(source)) {
+    stripped = source.replace(/^turbopack:\/\/\/\[project\]\//, '');
+    projectRelative = true;
+  } else if (/^webpack:\/\//.test(source)) {
+    stripped = source.replace(/^webpack:\/\/[^/]*\//, '').replace(/^\.\//, '');
+    projectRelative = true;
+  } else if (/^file:\/\//.test(source)) {
+    try {
+      return [fileURLToPath(source)];
+    } catch {
+      return [];
+    }
+  } else if (/^[a-z][\w+.-]*:\/\//i.test(source)) {
+    return [];
+  }
+  if (isAbsolute(stripped)) return [stripped];
+  const out = [resolve(mapDir, sourceRoot, stripped)];
+  if (projectRelative) {
+    // Relative to the project: the nearest folder above the map that has a package.json.
+    for (let dir = mapDir, i = 0; i < 12; i++) {
+      if (existsSync(join(dir, 'package.json'))) {
+        out.unshift(join(dir, stripped));
+        break;
+      }
+      const up = dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+  }
+  return out;
+}
+
+/** Fills the app's own sources into a map that left them out. Returns how many it filled. */
+export function fillSourcesContent(map: any, mapPath: string): number {
+  if (!Array.isArray(map.sources)) return 0;
+  const contents: Array<string | null> = Array.isArray(map.sourcesContent) ? [...map.sourcesContent] : [];
+  let filled = 0;
+  map.sources.forEach((source: unknown, i: number) => {
+    if (typeof contents[i] === 'string' || typeof source !== 'string') return;
+    if (/node_modules|^\[externals\]|\(ignored\)|^webpack\/runtime/.test(source)) return;
+    for (const path of sourcePathCandidates(source, mapPath, typeof map.sourceRoot === 'string' ? map.sourceRoot : '')) {
+      if (/[\\/]node_modules[\\/]/.test(path)) continue;
+      try {
+        const stat = statSync(path);
+        if (!stat.isFile() || stat.size > MAX_SOURCE_BYTES) continue;
+        contents[i] = readFileSync(path, 'utf8');
+        filled++;
+        break;
+      } catch {
+        // Not here: the next candidate.
+      }
+    }
+  });
+  if (filled) {
+    while (contents.length < map.sources.length) contents.push(null);
+    map.sourcesContent = contents.map((c) => (typeof c === 'string' ? c : null));
+  }
+  return filled;
 }
