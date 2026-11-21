@@ -177,6 +177,12 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/create-zharp:
+    dependencies:
+      '@zharp/cli':
+        specifier: workspace:^
+        version: link:../cli
+
   packages/logs:
     devDependencies:
       '@types/node':
@@ -240,12 +246,6 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
-
-  packages/zharp:
-    dependencies:
-      '@zharp/cli':
-        specifier: workspace:^
-        version: link:../cli
 
 packages:
 

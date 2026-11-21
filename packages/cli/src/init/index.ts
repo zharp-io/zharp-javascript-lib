@@ -49,7 +49,7 @@ export function mergeEnv(existing: string, vars: Record<string, string>): string
   const added = Object.entries(vars).filter(([k]) => !seen.has(k));
   if (added.length) {
     if (out.length) out.push('');
-    out.push('# Zharp (npx zharp init)');
+    out.push('# Zharp (npm init zharp@latest)');
     for (const [k, v] of added) out.push(`${k}=${v}`);
   }
   return `${out.join('\n')}\n`;
@@ -96,11 +96,11 @@ async function sendTestError(api: string, c: Connected): Promise<boolean> {
           timeUnixNano: now,
           severityNumber: 17,
           severityText: 'ERROR',
-          body: { stringValue: 'ZharpSetupTest: Zharp is connected — this is the test error npx zharp init sent' },
+          body: { stringValue: 'ZharpSetupTest: Zharp is connected — this is the test error npm init zharp@latest sent' },
           attributes: [
             attr('exception.type', 'ZharpSetupTest'),
-            attr('exception.message', 'Zharp is connected — this is the test error npx zharp init sent'),
-            attr('exception.stacktrace', 'ZharpSetupTest: Zharp is connected — this is the test error npx zharp init sent\n    at zharp init'),
+            attr('exception.message', 'Zharp is connected — this is the test error npm init zharp@latest sent'),
+            attr('exception.stacktrace', 'ZharpSetupTest: Zharp is connected — this is the test error npm init zharp@latest sent\n    at zharp init'),
             attr('zharp.handled', 'true'),
           ],
         }],

@@ -108,8 +108,8 @@ await test('the whole Next.js plan: new files, the edits, the keys, nothing outs
 });
 
 await test('env files: ours replaced or added, everything else kept', () => {
-  assert.equal(init.mergeEnv('DATABASE_URL=x\nZHARP_KEY=old\n', { ZHARP_KEY: 'new', ZHARP_AUTH_TOKEN: 't' }), 'DATABASE_URL=x\nZHARP_KEY=new\n\n# Zharp (npx zharp init)\nZHARP_AUTH_TOKEN=t\n');
-  assert.equal(init.mergeEnv('', { A: '1' }), '# Zharp (npx zharp init)\nA=1\n');
+  assert.equal(init.mergeEnv('DATABASE_URL=x\nZHARP_KEY=old\n', { ZHARP_KEY: 'new', ZHARP_AUTH_TOKEN: 't' }), 'DATABASE_URL=x\nZHARP_KEY=new\n\n# Zharp (npm init zharp@latest)\nZHARP_AUTH_TOKEN=t\n');
+  assert.equal(init.mergeEnv('', { A: '1' }), '# Zharp (npm init zharp@latest)\nA=1\n');
 });
 
 await test('keys never land in git: the env file is checked against .gitignore', () => {

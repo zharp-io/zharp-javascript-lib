@@ -15,6 +15,7 @@ const HELP = `zharp ${VERSION} — readable stack traces for Zharp
 
 Usage:
   zharp init                                            Connect this project to Zharp and set it up
+                                                        (also: npm init zharp@latest)
         [--yes] [--dry-run]                             (signs in through the browser)
   zharp sourcemaps inject <dir>                         Add debug IDs to JS files and their maps
   zharp sourcemaps upload <dir> --app <id>              Upload JS files and their maps
