@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { resolveConnection, UploadError, type Connection } from './api';
 import { consoleLogger } from './log';
 import { uploadDartSymbols, uploadDsyms, uploadProguard } from './native';
+import { uploadReactNative } from './react-native';
 import { injectDirectory, uploadSourcemaps } from './sourcemaps';
 import { VERSION } from './version';
 import { runInit } from './init';
@@ -24,6 +25,8 @@ Usage:
   zharp dart-symbols upload <dir> --app <id>            Flutter --split-debug-info output
         [--obfuscation-map <file>]                      (and its obfuscation map)
   zharp dsym upload <path> --app <id>                   A .dSYM, or a folder of them
+  zharp react-native upload --bundle <file> --map <file> --app <id>
+                                                        A React Native release bundle's source map
 
 Options:
   --app <id>          Application ID (or ZHARP_APP)
@@ -58,6 +61,8 @@ async function main(argv: string[]): Promise<void> {
       uuid: { type: 'string' },
       'obfuscation-map': { type: 'string' },
       sources: { type: 'string' },
+      bundle: { type: 'string' },
+      map: { type: 'string' },
       'no-sources': { type: 'boolean' },
       include: { type: 'string', multiple: true },
       exclude: { type: 'string', multiple: true },
@@ -123,6 +128,12 @@ async function main(argv: string[]): Promise<void> {
     case 'dart-symbols upload': {
       const sources = values['no-sources'] ? false : values.sources;
       await uploadDartSymbols(needTarget('the --split-debug-info directory'), connect(), { release, dryRun, logger, obfuscationMap: values['obfuscation-map'], sources });
+      return;
+    }
+    case 'react-native upload': {
+      if (!values.bundle || !values.map) fail('react-native upload needs --bundle <index.android.bundle | main.jsbundle> and --map <its source map>.');
+      for (const file of [values.bundle!, values.map!]) if (!existsSync(file)) fail(`${file} does not exist.`);
+      await uploadReactNative(values.bundle!, values.map!, connect(), { release, dryRun, logger });
       return;
     }
     case 'dsym upload': {

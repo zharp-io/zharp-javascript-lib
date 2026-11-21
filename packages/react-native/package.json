@@ -17,11 +17,14 @@
         "default": "./dist/index.js"
       }
     },
+    "./metro": "./metro.js",
     "./package.json": "./package.json"
   },
   "sideEffects": false,
   "files": [
     "dist",
+    "metro.js",
+    "zharp.gradle",
     "android/build.gradle",
     "android/src",
     "ios",
@@ -56,6 +59,9 @@
   "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "@zharp/cli": "workspace:^"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

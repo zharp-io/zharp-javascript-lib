@@ -249,6 +249,9 @@ importers:
 
   packages/react-native:
     dependencies:
+      '@zharp/cli':
+        specifier: workspace:^
+        version: link:../cli
       react-native:
         specifier: '>=0.74'
         version: 0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(react@19.3.1)
