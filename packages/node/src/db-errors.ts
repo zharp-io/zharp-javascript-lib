@@ -18,6 +18,7 @@ import { context, createContextKey, SpanKind, SpanStatusCode, trace, type Contex
 import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace';
 import { InstrumentationBase, InstrumentationNodeModuleDefinition } from '@opentelemetry/instrumentation';
 import { VERSION } from './version';
+import { SOURCE_CONTEXT_ATTRIBUTE, sourced } from './source';
 
 /** What a failed query tells: where, what, and the driver's own error once it is seen. */
 export interface DbFailure {
@@ -105,8 +106,10 @@ export function reportOf(failure: DbFailure): DbErrorReport {
   const code = (error?.code !== undefined ? String(error.code) : null) ?? failure.code;
   const type = dbErrorType(failure.system, code, error?.name);
   const message = error?.message || failure.scrubbed?.replace(/^.*?error of type '[^']*' occurred/i, `${SYSTEM_NAMES[failure.system] ?? 'Database'} error`) || 'The query failed';
-  const stack = [`${type}: ${message}`, ...failure.frames].join('\n');
+  // The call site's built frames turned back into their sources, and the code that ran there.
+  const { stack, context } = sourced([`${type}: ${message}`, ...failure.frames].join('\n'));
   const attributes: Record<string, string> = {
+    ...(context ? { [SOURCE_CONTEXT_ATTRIBUTE]: context } : {}),
     'zharp.mechanism': 'db',
     'db.system': failure.system,
     ...(failure.statement ? { 'db.statement': failure.statement.slice(0, 4000) } : {}),

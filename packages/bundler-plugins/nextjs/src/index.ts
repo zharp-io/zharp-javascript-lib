@@ -65,6 +65,10 @@ function apply(config: NextConfigObject, options: ZharpNextOptions): NextConfigO
     // comments pointing at them removed).
     productionBrowserSourceMaps: true,
     experimental: { ...config.experimental, serverSourceMaps: true },
+    // @zharp/node (loaded from instrumentation.ts) is required at run time, not bundled: it and
+    // OpenTelemetry patch modules as Node loads them, and bundling their optional dependencies
+    // breaks Turbopack builds.
+    serverExternalPackages: [...new Set([...(config.serverExternalPackages ?? []), '@zharp/node'])],
   };
 
   if (hook === 'runAfterProductionCompile') {

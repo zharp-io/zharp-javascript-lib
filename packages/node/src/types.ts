@@ -124,6 +124,14 @@ export interface NodeOptions {
    */
   captureQueryErrors?: boolean;
   /**
+   * The code around each error's lines, read on this server from your own files (never
+   * node_modules) and sent with the error, so Zharp shows exactly the code that ran without a
+   * repository link. Built code (TypeScript, a NestJS dist/) is read through the .js.map files
+   * next to it: the stack and the code are your sources. The innermost five frames, five lines
+   * either side. Default true; ZHARP_CAPTURE_SOURCE_CONTEXT=false turns it off.
+   */
+  captureSourceContext?: boolean;
+  /**
    * Capture uncaught exceptions and unhandled rejections. Default true. The process still
    * exits as Node would have, once they have been sent.
    */

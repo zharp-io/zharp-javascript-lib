@@ -21,6 +21,15 @@ export default defineConfig([
     splitting: true,
     define: { __ZHARP_CDN__: 'false' },
   },
+  // @zharp/browser/react: the error boundary, with React left to the app.
+  {
+    ...shared,
+    entry: { react: 'src/react.ts' },
+    format: ['esm', 'cjs'],
+    dts: true,
+    external: ['react'],
+    define: { __ZHARP_CDN__: 'false' },
+  },
   // The script tag: one file exposing a global `Zharp`.
   {
     ...shared,

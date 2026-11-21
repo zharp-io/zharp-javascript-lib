@@ -8,6 +8,7 @@
  */
 import { inspect } from 'node:util';
 import { debugIdAttributes } from '@zharp/internal/debug-ids';
+import { SOURCE_CONTEXT_ATTRIBUTE, sourced } from './source';
 
 /** OTLP severity numbers. */
 export const SEVERITY = { trace: 1, debug: 5, info: 9, warn: 13, error: 17, fatal: 21 } as const;
@@ -42,11 +43,15 @@ export function exceptionAttributes(error: Error, handled: boolean): Record<stri
   // A cause is part of what went wrong; Node prints it, so the stack shown in Zharp does too.
   const cause = (error as { cause?: unknown }).cause;
   if (cause instanceof Error && cause.stack) stack += `\nCaused by: ${cause.stack}`;
+  // Built frames turned back into their sources through local maps, and the code that ran.
+  const { stack: readable, context } = sourced(stack);
   return {
     'exception.type': type,
     'exception.message': message,
-    'exception.stacktrace': stack,
+    'exception.stacktrace': readable,
     'zharp.handled': handled ? 'true' : 'false',
+    // From the stack as it ran: frames resolved here keep their bundle's ID for uploaded maps.
     ...debugIdAttributes(stack),
+    ...(context ? { [SOURCE_CONTEXT_ATTRIBUTE]: context } : {}),
   };
 }

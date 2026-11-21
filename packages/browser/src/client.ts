@@ -233,6 +233,37 @@ export class ZharpBrowser {
   }
 
   /**
+   * React 19: the handler for createRoot's (or hydrateRoot's) error options. Each error a render
+   * throws is reported once, as a crash, with the component stack — which components were
+   * rendering — next to its own stack:
+   *
+   *     createRoot(el, {
+   *       onUncaughtError: Zharp.reactErrorHandler(),
+   *       onCaughtError: Zharp.reactErrorHandler(),
+   *     });
+   *
+   * React's own reporting (the console) carries on as before; `callback` runs after, for an app
+   * that had its own handler there. For React 18, use ZharpErrorBoundary from @zharp/browser/react.
+   */
+  reactErrorHandler(callback?: (error: unknown, errorInfo: { componentStack?: string | null }) => void) {
+    return (error: unknown, errorInfo?: { componentStack?: string | null }): void => {
+      this.reportReactError(error, errorInfo?.componentStack);
+      if (callback) {
+        callback(error, errorInfo ?? {});
+      } else {
+        // What React does when no handler is given: the browser's own error report and console line.
+        safely(() => (typeof reportError === 'function' ? reportError(error) : console.error(error)));
+      }
+    };
+  }
+
+  /** @internal An error React caught, with the stack of components that were rendering. */
+  reportReactError(error: unknown, componentStack?: string | null): void {
+    const stack = typeof componentStack === 'string' ? componentStack.trim().slice(0, 4000) : '';
+    this.report(error, false, { 'zharp.mechanism': 'react', ...(stack ? { 'react.component_stack': stack } : {}) });
+  }
+
+  /**
    * Run `fn` in a span named `name`. Requests and logs from its synchronous part belong to it;
    * a promise it returns ends the span when it settles. Errors pass through unchanged.
    */

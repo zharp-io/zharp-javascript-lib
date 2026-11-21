@@ -375,7 +375,8 @@ console.log('\n@zharp/node: no key');
 
 console.log('\n@zharp/node: ZHARP_TRACING=false (node-logs-only.mjs)');
 {
-  const app = await run(nodeArgs('node-logs-only.mjs'), { TEST_KEY: 'node-logs-only', ZHARP_TRACING: 'false', ZHARP_LOGS: 'true' });
+  // No source context: the fixture's own code names the user, and the checks below count that name.
+  const app = await run(nodeArgs('node-logs-only.mjs'), { TEST_KEY: 'node-logs-only', ZHARP_TRACING: 'false', ZHARP_LOGS: 'true', ZHARP_CAPTURE_SOURCE_CONTEXT: 'false' });
   assert.ok(app.result, app.err);
   const logs = text('node-logs-only', '/v1/logs');
   check('activation line says logs only', () => {

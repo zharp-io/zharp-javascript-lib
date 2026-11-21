@@ -47,6 +47,7 @@ import { withBodyCapture } from './bodies';
 import { headerSettings, withHeaderCapture } from './headers';
 import { DbDriverErrorsInstrumentation, DbErrorSpanProcessor, reportOf, type DbFailure } from './db-errors';
 import { FrameworkErrorsInstrumentation, RecordedExceptionsProcessor } from './framework-errors';
+import { setSourceContext } from './source';
 import { UrlRedactionSpanProcessor } from './urls';
 import { ContextLogProcessor, ContextSpanProcessor, ContextStore, userAttributes } from './context';
 import { captureConsole } from './console';
@@ -149,6 +150,7 @@ export class ZharpNode {
     const exporterOptions = { headers, compression: 'gzip' as any };
     // Logs only: no span exporter at all. The context processor stays, because it is what keeps
     // a user set with setUser() to its own request (see RecordOnlySampler).
+    setSourceContext(switchOn(options.captureSourceContext, 'ZHARP_CAPTURE_SOURCE_CONTEXT', true));
     const queryErrors = tracing && switchOn(options.captureQueryErrors, 'ZHARP_CAPTURE_QUERY_ERRORS', true);
     this.dbErrors = queryErrors ? new DbErrorSpanProcessor((failure) => this.sendQueryError(failure, true, "error", { "zharp.mechanism": "db" })) : null;
     this.spanProcessors = tracing
@@ -277,6 +279,31 @@ export class ZharpNode {
   captureError(error: unknown, attributes?: Attributes): void {
     this.report(error, true, 'error', attributes);
   }
+
+  /**
+   * Next.js (15+): errors a route handler, server component, server action or middleware threw,
+   * which Next answers with an error page and only prints. Export it from instrumentation.ts:
+   *
+   *     export const onRequestError = Zharp.onRequestError;
+   *
+   * Each is reported once as a crash, with the request's path, method and route. A bound function,
+   * so it can be exported as it is.
+   */
+  readonly onRequestError = (
+    error: unknown,
+    request?: { path?: string; method?: string; headers?: Record<string, string | string[] | undefined> },
+    context?: { routerKind?: string; routePath?: string; routeType?: string; renderSource?: string },
+  ): void => {
+    this.report(error, false, 'error', {
+      'zharp.mechanism': 'nextjs',
+      ...(request?.method ? { 'http.request.method': request.method } : {}),
+      ...(request?.path ? { 'url.path': request.path } : {}),
+      ...(context?.routePath ? { 'http.route': context.routePath } : {}),
+      ...(context?.routeType ? { 'next.route_type': context.routeType } : {}),
+      ...(context?.routerKind ? { 'next.router_kind': context.routerKind } : {}),
+      ...(context?.renderSource ? { 'next.render_source': context.renderSource } : {}),
+    }, true);
+  };
 
   /**
    * Run `fn` inside a span named `name`, which ends when `fn` returns or its promise settles. A

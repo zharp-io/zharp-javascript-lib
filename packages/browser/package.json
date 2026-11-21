@@ -20,7 +20,17 @@
     },
     "./dist/zharp.min.js": "./dist/zharp.min.js",
     "./dist/zharp-replay.min.js": "./dist/zharp-replay.min.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./react": {
+      "import": {
+        "types": "./dist/react.d.mts",
+        "default": "./dist/react.mjs"
+      },
+      "require": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      }
+    }
   },
   "sideEffects": false,
   "files": [
@@ -63,8 +73,18 @@
   "devDependencies": {
     "@rrweb/types": "^2.1.1",
     "@types/node": "^25.9.3",
+    "@types/react": "^19.3.0",
     "@zharp/internal": "workspace:*",
+    "react": "^19.3.1",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "react": ">=16.8"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

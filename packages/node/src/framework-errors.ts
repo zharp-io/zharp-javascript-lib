@@ -115,7 +115,8 @@ export class RecordedExceptionsProcessor {
 
   onStart(span: any): void {
     const scope: string = span.instrumentationScope?.name ?? span.instrumentationLibrary?.name ?? '';
-    if (!scope.startsWith('@opentelemetry/instrumentation-')) return;
+    // OpenTelemetry's instrumentations, and Next.js's own tracing (its spans record what a route throws).
+    if (!scope.startsWith('@opentelemetry/instrumentation-') && scope !== 'next.js') return;
     if (span.attributes?.['db.system'] || span.attributes?.['db.system.name']) return;
     const original = span.recordException.bind(span);
     span.recordException = (exception: any, time?: any) => {
@@ -174,5 +175,6 @@ export class RecordedExceptionsProcessor {
 /** "@opentelemetry/instrumentation-nestjs-core" → "nestjs"; Express's router → "express". */
 export function mechanismOf(scope: string): string {
   const name = scope.replace('@opentelemetry/instrumentation-', '').replace(/-core$/, '');
-  return name === 'router' ? 'express' : name;
+  if (name === 'router') return 'express';
+  return name === 'next.js' ? 'nextjs' : name;
 }
