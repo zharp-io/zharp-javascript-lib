@@ -10,6 +10,7 @@ import { readElf, isElf } from './elf';
 import { formatBytes, walk } from './files';
 import { consoleLogger, type Logger } from './log';
 import { isMachO, readMachO } from './macho';
+import { swiftNames, type XcodeTool } from './swift-names';
 import { APPLE_SOURCES, collectSources, FLUTTER_SOURCES, isAppleRoot, isFlutterRoot, projectRoot, sourceBundleArtifacts } from './source-bundle';
 
 export interface NativeUploadOptions {
@@ -24,6 +25,8 @@ export interface NativeUploadOptions {
    * from the working directory — pubspec.yaml for Flutter, the .xcodeproj or $SRCROOT for iOS).
    */
   sources?: string | false;
+  /** dsym upload: how Xcode's tools are run (tests); default xcrun on a Mac, none elsewhere. */
+  xcodeTool?: XcodeTool | null;
 }
 
 /** The source bundle for these build IDs, when sources are on and the project is found. */
@@ -224,6 +227,17 @@ export async function uploadDsyms(path: string, connection: Connection | null, o
       gzip: true,
     };
   });
+  // Swift's mangled names, decoded by this Mac's swift-demangle: crashes read "Cart.total() -> Int".
+  const names = swiftNames(images.map((image) => image.path), options.xcodeTool === undefined ? undefined : options.xcodeTool);
+  if (names && Object.keys(names).length) {
+    const data = Buffer.from(JSON.stringify({ names }), 'utf8');
+    logger.info(`With readable names for ${Object.keys(names).length} Swift symbol(s)`);
+    for (const uuid of new Set(images.map((image) => image.uuid))) {
+      artifacts.push({ kind: 'symbol-names', debugId: uuid, name: 'swift-names.json', release: options.release, data, gzip: true });
+    }
+  } else if (names === null) {
+    logger.info('Swift names stay mangled: run the upload on a Mac with Xcode (xcrun swift-demangle) to send readable ones.');
+  }
   artifacts.push(...withSources('apple', [...new Set(images.map((image) => image.uuid))], options, logger));
   return send(connection, artifacts, options);
 }
