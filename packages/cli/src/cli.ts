@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { resolveConnection, UploadError, type Connection } from './api';
 import { consoleLogger } from './log';
 import { uploadDartSymbols, uploadDsyms, uploadProguard } from './native';
-import { uploadReactNative } from './react-native';
+import { uploadReactNative, uploadReactNativeDir } from './react-native';
 import { injectDirectory, uploadSourcemaps } from './sourcemaps';
 import { VERSION } from './version';
 import { runInit } from './init';
@@ -27,6 +27,7 @@ Usage:
   zharp dsym upload <path> --app <id>                   A .dSYM, or a folder of them
   zharp react-native upload --bundle <file> --map <file> --app <id>
                                                         A React Native release bundle's source map
+  zharp react-native upload --dir dist --app <id>       Every bundle an \`npx expo export\` wrote (EAS Update)
 
 Options:
   --app <id>          Application ID (or ZHARP_APP)
@@ -62,6 +63,7 @@ async function main(argv: string[]): Promise<void> {
       'obfuscation-map': { type: 'string' },
       sources: { type: 'string' },
       bundle: { type: 'string' },
+      dir: { type: 'string' },
       map: { type: 'string' },
       'no-sources': { type: 'boolean' },
       include: { type: 'string', multiple: true },
@@ -131,7 +133,12 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case 'react-native upload': {
-      if (!values.bundle || !values.map) fail('react-native upload needs --bundle <index.android.bundle | main.jsbundle> and --map <its source map>.');
+      if (values.dir) {
+        if (!existsSync(values.dir)) fail(`${values.dir} does not exist.`);
+        await uploadReactNativeDir(values.dir, connect(), { release, dryRun, logger });
+        return;
+      }
+      if (!values.bundle || !values.map) fail('react-native upload needs --bundle <index.android.bundle | main.jsbundle> and --map <its source map>, or --dir <expo export output>.');
       for (const file of [values.bundle!, values.map!]) if (!existsSync(file)) fail(`${file} does not exist.`);
       await uploadReactNative(values.bundle!, values.map!, connect(), { release, dryRun, logger });
       return;

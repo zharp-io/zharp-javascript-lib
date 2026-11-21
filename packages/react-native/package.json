@@ -18,12 +18,14 @@
       }
     },
     "./metro": "./metro.js",
+    "./app.plugin.js": "./app.plugin.js",
     "./package.json": "./package.json"
   },
   "sideEffects": false,
   "files": [
     "dist",
     "metro.js",
+    "app.plugin.js",
     "zharp.gradle",
     "android/build.gradle",
     "android/src",

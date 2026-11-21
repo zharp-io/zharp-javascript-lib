@@ -6,8 +6,9 @@
  * `zharp-debug-id:<uuid>` the serializer wrote. The map is the composed one (Metro's mapped
  * through Hermes', as React Native's build writes it), with the sources inside.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
+import { walk } from './files';
 import { uploadArtifact, type Artifact, type Connection } from './api';
 import { formatBytes } from './files';
 import { consoleLogger, type Logger } from './log';
@@ -44,4 +45,24 @@ export async function uploadReactNative(bundlePath: string, mapPath: string, con
   }
   logger.info(`${options.dryRun ? 'Would upload' : 'Uploaded'} the source map of ${basename(bundlePath)} (${formatBytes(data.length)}, ${withSources} source file(s) inside)  ${id}`);
   return artifact;
+}
+
+/**
+ * Every bundle an `npx expo export` (EAS Update) wrote under `dir` — `_expo/static/js/<platform>/
+ * *.hbc` or `*.js`, each with its `.map` — uploaded under its own debug ID.
+ */
+export async function uploadReactNativeDir(dir: string, connection: Connection | null, options: ReactNativeUploadOptions = {}): Promise<Artifact[]> {
+  const logger = options.logger ?? consoleLogger();
+  const bundles = walk(dir).filter((file) => /\.(hbc|js|bundle|jsbundle)$/.test(file) && existsSync(`${file}.map`));
+  if (!bundles.length) throw new Error(`No bundles with source maps in ${dir} — export with \`npx expo export --source-maps\`.`);
+  const out: Artifact[] = [];
+  for (const bundle of bundles) {
+    if (!bundleDebugId(readFileSync(bundle))) {
+      logger.info(`  ${basename(bundle)}: no Zharp debug ID (metro.config.js without withZharpConfig?), skipped`);
+      continue;
+    }
+    const artifact = await uploadReactNative(bundle, `${bundle}.map`, connection, options);
+    if (artifact) out.push(artifact);
+  }
+  return out;
 }
