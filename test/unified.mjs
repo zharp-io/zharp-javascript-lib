@@ -509,6 +509,15 @@ console.log('\n@zharp/browser: captureBodies (browser-bodies.mjs)');
     assert.equal(got.user.apiKey, '[Filtered]');
     assert.equal(got.user.email, 'a@b.test');
   });
+  check('captureHeaders (on by default): what was sent and what came back, secrets [Filtered]', () => {
+    assert.equal(login.attrs['http.request.header.authorization'], '[Filtered]', 'sent, but its value never leaves the page');
+    assert.equal(login.attrs['http.request.header.x-client'], 'web');
+    assert.match(login.attrs['http.request.header.traceparent'], /^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/);
+    assert.equal(login.attrs['http.response.header.x-request-id'], 'req-7');
+    const offLogin = span('bodies-off', 'POST /api/login');
+    assert.equal(offLogin.attrs['http.request.header.x-client'], 'web', 'headers without captureBodies too');
+    assert.equal(offLogin.attrs['http.request.body'], undefined);
+  });
   check('the application still reads the response it captured', () => {
     assert.deepEqual(errors.result.consumed, ['bad credentials']);
   });

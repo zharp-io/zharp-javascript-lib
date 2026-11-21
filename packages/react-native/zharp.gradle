@@ -1,0 +1,56 @@
+// @zharp/react-native for Android builds: after each release bundle, its source map goes to Zharp,
+// filed under the bundle's debug ID (see @zharp/react-native/metro), so JavaScript errors from the
+// release read as the app's own source, with the code — no repository needed.
+//
+//     // android/app/build.gradle, after `apply plugin: "com.facebook.react"`:
+//     apply from: new File(["node", "--print", "require.resolve('@zharp/react-native/package.json')"].execute(null, rootDir).text.trim(), "../zharp.gradle")
+//
+// It needs ZHARP_AUTH_TOKEN (a workspace API key with the Build uploads scope) and the app's ID in
+// ZHARP_APP — from the environment (CI, EAS), else zharp.authToken / zharp.appId in local.properties
+// (which git ignores; `npm init zharp@latest` writes them there). Without a token it says so and
+// the build carries on. ZHARP_URL points it at another Zharp; zharpUploadSourceMaps=false in
+// gradle.properties turns it off.
+
+def zharpProviders = providers
+def zharpRoot = rootDir
+def zharpLocal = new Properties()
+def zharpLocalFile = new File(rootDir, "local.properties")
+if (zharpLocalFile.exists()) zharpLocalFile.withInputStream { zharpLocal.load(it) }
+def zharpToken = System.getenv("ZHARP_AUTH_TOKEN") ?: zharpLocal.getProperty("zharp.authToken", "")
+def zharpAppId = providers.environmentVariable("ZHARP_APP").orElse(providers.gradleProperty("zharpAppId")).getOrElse(zharpLocal.getProperty("zharp.appId", ""))
+def zharpEnabled = providers.gradleProperty("zharpUploadSourceMaps").getOrElse("true") != "false"
+def zharpBuildDir = layout.buildDirectory
+
+tasks.configureEach { task ->
+    def match = task.name =~ /^createBundle(.+)JsAndAssets$/
+    if (!match.matches() || !zharpEnabled) return
+    def variant = match.group(1)
+    def dir = variant.substring(0, 1).toLowerCase() + variant.substring(1)
+    task.doLast {
+        def bundle = zharpBuildDir.file("generated/assets/react/${dir}/index.android.bundle").get().asFile
+        def map = zharpBuildDir.file("generated/sourcemaps/react/${dir}/index.android.bundle.map").get().asFile
+        if (!bundle.exists() || !map.exists()) {
+            logger.lifecycle("Zharp: no ${dir} bundle and source map to upload (${bundle.name}, ${map.name}).")
+            return
+        }
+        if (!zharpToken) {
+            logger.lifecycle("Zharp: ZHARP_AUTH_TOKEN isn't set, so the ${dir} source map wasn't uploaded; JavaScript errors from this build will show bundle positions.")
+            return
+        }
+        def cli = zharpProviders.exec {
+            commandLine "node", "--print", "require.resolve('@zharp/cli/package.json')"
+            workingDir zharpRoot
+        }.standardOutput.asText.get().trim()
+        def args = ["node", new File(new File(cli).parentFile, "dist/cli.js").absolutePath, "react-native", "upload",
+                    "--bundle", bundle.absolutePath, "--map", map.absolutePath]
+        if (zharpAppId) args += ["--app", zharpAppId]
+        def result = zharpProviders.exec {
+            commandLine args
+            environment "ZHARP_AUTH_TOKEN", zharpToken
+            ignoreExitValue = true
+        }
+        logger.lifecycle(result.standardOutput.asText.get().trim())
+        def errors = result.standardError.asText.get().trim()
+        if (result.result.get().exitValue != 0) logger.warn("Zharp: the source map upload failed — ${errors}")
+    }
+}

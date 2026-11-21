@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
-export type Framework = 'nextjs' | 'vite-react' | 'nestjs' | 'express' | 'node' | 'django' | 'fastapi' | 'flask' | 'laravel' | 'go' | 'unknown';
+export type Framework = 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs' | 'express' | 'node' | 'django' | 'fastapi' | 'flask' | 'laravel' | 'go' | 'unknown';
 
 export interface Project {
   dir: string;
@@ -15,7 +15,7 @@ export interface Project {
   /** "Next.js 16", "React (Vite)", "NestJS 11"… for the terminal and the page. */
   label: string;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'react-native' | 'otel';
   packageManager: 'pnpm' | 'yarn' | 'bun' | 'npm';
   typescript: boolean;
   /** Next.js: the app directory ("app" or "src/app"), when it uses the app router. */
@@ -50,6 +50,9 @@ export function detect(dir: string): Project {
   const name = (typeof pkg?.name === 'string' && pkg.name.replace(/^@[^/]+\//, '')) || basename(dir);
   const base = { dir, name, packageManager: packageManagerOf(dir), typescript: !!deps.typescript || existsSync(join(dir, 'tsconfig.json')), packageJson: pkg ?? undefined };
 
+  // Before React and Node: an app with react-native depends on react too.
+  if (deps.expo) return { ...base, framework: 'expo', label: `Expo${majorOf(deps.expo).replace(/^ (\d+)$/, ' SDK $1')}`, platform: 'react-native' };
+  if (deps['react-native']) return { ...base, framework: 'react-native', label: `React Native${/(\d+\.\d+)/.exec(deps['react-native'])?.[1] ? ` ${/(\d+\.\d+)/.exec(deps['react-native'])![1]}` : ''}`, platform: 'react-native' };
   if (deps.next) {
     const appDir = existsSync(join(dir, 'src', 'app')) ? 'src/app' : existsSync(join(dir, 'app')) ? 'app' : undefined;
     return { ...base, framework: 'nextjs', label: `Next.js${majorOf(deps.next)}`, platform: 'browser', appDir };
@@ -67,7 +70,12 @@ export function detect(dir: string): Project {
   }
   const composer = read(join(dir, 'composer.json'));
   if (composer && /laravel\/framework/.test(composer)) return { ...base, name: basename(dir), framework: 'laravel', label: 'Laravel', platform: 'php' };
-  if (existsSync(join(dir, 'go.mod'))) return { ...base, name: basename(dir), framework: 'go', label: 'Go', platform: 'go' };
+  const goMod = read(join(dir, 'go.mod'));
+  if (goMod !== null) {
+    const router = /github\.com\/gin-gonic\/gin/.test(goMod) ? ' (Gin)' : /github\.com\/labstack\/echo/.test(goMod) ? ' (Echo)' : '';
+    const moduleName = /^module\s+(\S+)/m.exec(goMod)?.[1]?.split('/').pop();
+    return { ...base, name: moduleName || basename(dir), framework: 'go', label: `Go${router}`, platform: 'go' };
+  }
   if (pkg) return { ...base, framework: 'node', label: 'Node.js', platform: 'node' };
   return { ...base, framework: 'unknown', label: 'an unknown project', platform: 'otel' };
 }

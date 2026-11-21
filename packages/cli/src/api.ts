@@ -6,7 +6,7 @@ import { gzipSync } from 'node:zlib';
 
 export const DEFAULT_URL = 'https://api.zharp.io';
 
-export type ArtifactKind = 'sourcemap' | 'minified-source' | 'proguard' | 'dart-symbols' | 'dart-obfuscation-map' | 'dsym';
+export type ArtifactKind = 'sourcemap' | 'minified-source' | 'proguard' | 'dart-symbols' | 'dart-obfuscation-map' | 'dsym' | 'source-bundle' | 'symbol-names';
 
 export interface Connection {
   /** The Zharp API's base URL, e.g. https://api.zharp.io. */

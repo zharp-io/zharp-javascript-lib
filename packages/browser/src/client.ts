@@ -7,6 +7,7 @@
  * point catches, and a failure to send is silent apart from one warning for a rejected key.
  */
 import { bodySettings, redactUrl } from '@zharp/internal/bodies';
+import { headerSettings } from '@zharp/internal/headers';
 import { parseUserAgent } from './environment';
 import { asError, exceptionAttributes, watchConsole, watchErrors, type ConsoleMethod } from './instrument/errors';
 import { absolute, instrumentFetch, instrumentXhr, matches, sameOrigin, type HttpHooks } from './instrument/http';
@@ -151,6 +152,7 @@ export class ZharpBrowser {
       shouldPropagate: (url) => sameOrigin(url) || matches(url, tracingOrigins),
       baggage: () => this.baggage(),
       bodies,
+      headers: headerSettings(options.captureHeaders),
       // The app's own APIs only, unless the app names the URLs itself.
       shouldCaptureBodies: (url) => (bodies?.urls ? matches(url, bodies.urls) : sameOrigin(url) || matches(url, tracingOrigins)),
     };

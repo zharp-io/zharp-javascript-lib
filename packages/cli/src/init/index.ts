@@ -10,7 +10,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { connect, SetupFailed, type Connected } from './connect';
 import { detect, type Project } from './detect';
 import { DEFAULT_API, GUIDES, planFor, type Plan } from './recipes';
@@ -75,6 +75,14 @@ function installCommand(project: Project, packages: string[], dev: boolean, tarb
   }
 }
 
+/** Whether `command` is on the PATH (composer, go, uv…). */
+function installed(command: string): boolean {
+  const found = process.platform === 'win32'
+    ? spawnSync('where', [command], { stdio: 'ignore' })
+    : spawnSync('sh', ['-c', 'command -v "$0"', command], { stdio: 'ignore' });
+  return found.status === 0;
+}
+
 async function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -123,8 +131,9 @@ function showPlan(plan: Plan, c: Connected): void {
   say(`${green('◆')} ${bold('These changes will be made:')}`);
   const deps = [...plan.install, ...plan.devInstall];
   if (deps.length) say(`${bar}  ${green('+')} install ${deps.join(' ')}`);
+  for (const cmd of plan.commands ?? []) say(`${bar}  ${green('+')} ${cmd.label}`);
   for (const ch of plan.changes) say(`${bar}  ${ch.kind === 'create' ? green('+') : yellow('~')} ${bold(ch.path)}   ${dim(ch.kind === 'create' ? `(new) ${ch.note}` : ch.note)}`);
-  say(`${bar}  ${green('+')} ${bold(plan.env.file)}   ${dim(Object.keys(plan.env.vars).join(', '))}`);
+  if (plan.env.file) say(`${bar}  ${green('+')} ${bold(plan.env.file)}   ${dim(Object.keys(plan.env.vars).join(', '))}`);
   for (const m of plan.manual) say(`${bar}  ${yellow('!')} ${m.path}: ${dim(`left as it is — ${m.why}`)}`);
   void c;
 }
@@ -197,29 +206,47 @@ export async function runInit(options: InitOptions): Promise<number> {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, ch.content);
   }
-  const envPath = join(dir, plan.env.file);
-  writeFileSync(envPath, mergeEnv(existsSync(envPath) ? readFileSync(envPath, 'utf8') : '', plan.env.vars));
-  const gitignorePath = join(dir, '.gitignore');
-  if (existsSync(join(dir, '.git')) || existsSync(gitignorePath)) {
-    const gitignore = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
-    if (!ignoredByGit(gitignore, plan.env.file)) writeFileSync(gitignorePath, `${gitignore.replace(/\s*$/, '\n')}${plan.env.file}\n`);
+  if (plan.env.file) {
+    const envPath = join(dir, plan.env.file);
+    writeFileSync(envPath, mergeEnv(existsSync(envPath) ? readFileSync(envPath, 'utf8') : '', plan.env.vars));
+    const gitignorePath = join(dir, '.gitignore');
+    if (existsSync(join(dir, '.git')) || existsSync(gitignorePath)) {
+      const gitignore = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
+      if (!ignoredByGit(gitignore, plan.env.file)) writeFileSync(gitignorePath, `${gitignore.replace(/\s*$/, '\n')}${plan.env.file}\n`);
+    }
   }
   say(`${green('◇')} Files written`);
+
+  /** Runs one command in the project: 'ok', 'failed', or 'missing' when the tool isn't installed. */
+  const run = (command: string, args: string[]): 'ok' | 'failed' | 'missing' => {
+    // A tool that isn't installed is said once, in our words, not in the shell's.
+    if (!isAbsolute(command) && !installed(command)) return 'missing';
+    say(`${bar} ${dim(`${command} ${args.join(' ')}`)}`);
+    // Windows runs npm/pnpm/composer through .cmd shims, which need a shell: one command line, quoted.
+    const result = process.platform === 'win32'
+      ? spawnSync([command, ...args].map((a) => (/[\s"&|<>^]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' '), { cwd: dir, stdio: 'inherit', shell: true })
+      : spawnSync(command, args, { cwd: dir, stdio: 'inherit' });
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' || (process.platform === 'win32' && result.status === 9009) || (process.platform !== 'win32' && result.status === 127)) return 'missing';
+    return result.status === 0 ? 'ok' : 'failed';
+  };
 
   for (const [packages, dev] of [[plan.install, false], [plan.devInstall, true]] as const) {
     if (!packages.length) continue;
     const [command, args] = installCommand(project, [...packages], dev, options.tarballs);
-    say(`${bar} ${dim(`${command} ${args.join(' ')}`)}`);
-    // Windows runs npm/pnpm through their .cmd shims, which need a shell: one command line, quoted.
-    const result = process.platform === 'win32'
-      ? spawnSync([command, ...args].map((a) => (/[\s"&|<>^]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' '), { cwd: dir, stdio: 'inherit', shell: true })
-      : spawnSync(command, args, { cwd: dir, stdio: 'inherit' });
-    if (result.status !== 0) {
+    if (run(command, args) !== 'ok') {
       say(`${yellow('■')} The install failed. Run it yourself: ${command} ${args.join(' ')}`);
       return 1;
     }
   }
-  say(`${green('◇')} Packages installed`);
+  const leftToDo: string[] = [];
+  for (const cmd of plan.commands ?? []) {
+    const [command, ...args] = cmd.argv;
+    const result = run(command, args);
+    if (result === 'missing') leftToDo.push(`${cmd.argv.join(' ')}   ${dim(`(${command} isn't installed here)`)}`);
+    else if (result === 'failed') leftToDo.push(cmd.argv.join(' '));
+  }
+  say(`${green('◇')} ${leftToDo.length ? 'Set up — finish with:' : 'Packages installed'}`);
+  for (const line of leftToDo) say(`${bar}   ${line}`);
 
   for (const m of plan.manual) {
     say(bar);

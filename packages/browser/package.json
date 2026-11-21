@@ -1,6 +1,6 @@
 {
   "name": "@zharp/browser",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Zharp Application Monitoring for the browser — errors, logs, traces and session replay",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

@@ -10,6 +10,8 @@ import { readElf, isElf } from './elf';
 import { formatBytes, walk } from './files';
 import { consoleLogger, type Logger } from './log';
 import { isMachO, readMachO } from './macho';
+import { swiftNames, type XcodeTool } from './swift-names';
+import { APPLE_SOURCES, collectSources, FLUTTER_SOURCES, isAppleRoot, isFlutterRoot, projectRoot, sourceBundleArtifacts } from './source-bundle';
 
 export interface NativeUploadOptions {
   release?: string;
@@ -17,6 +19,31 @@ export interface NativeUploadOptions {
   logger?: Logger;
   fetch?: typeof fetch;
   retries?: number;
+  /**
+   * The app's source files go with the symbols, so errors show the code of the build (default:
+   * on). `false` leaves them out; a path is the project folder to read them from (default: found
+   * from the working directory — pubspec.yaml for Flutter, the .xcodeproj or $SRCROOT for iOS).
+   */
+  sources?: string | false;
+  /** dsym upload: how Xcode's tools are run (tests); default xcrun on a Mac, none elsewhere. */
+  xcodeTool?: XcodeTool | null;
+}
+
+/** The source bundle for these build IDs, when sources are on and the project is found. */
+function withSources(kind: 'flutter' | 'apple', buildIds: string[], options: NativeUploadOptions, logger: Logger): Artifact[] {
+  if (options.sources === false || !buildIds.length) return [];
+  const root = typeof options.sources === 'string'
+    ? resolve(options.sources)
+    : kind === 'apple' && process.env.SRCROOT ? process.env.SRCROOT
+      : projectRoot(process.cwd(), kind === 'flutter' ? isFlutterRoot : isAppleRoot);
+  if (!root || !existsSync(root)) {
+    logger.info(`Sources: no ${kind === 'flutter' ? 'Flutter project (pubspec.yaml)' : 'Xcode project'} found from ${process.cwd()} — pass --sources <project folder>, or --no-sources.`);
+    return [];
+  }
+  const sources = collectSources(root, kind === 'flutter' ? FLUTTER_SOURCES : APPLE_SOURCES);
+  if (!sources.count) return [];
+  logger.info(`With the app's sources: ${sources.count} file(s), ${formatBytes(sources.bytes)} from ${root}${sources.skipped ? ` (${sources.skipped} over the size caps left out)` : ''} — errors show the code of this build. --no-sources to leave them out.`);
+  return sourceBundleArtifacts(sources, buildIds, options.release);
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -147,6 +174,7 @@ export async function uploadDartSymbols(path: string, connection: Connection | n
   } else {
     logger.info('No obfuscation map found (build with --extra-gen-snapshot-options=--save-obfuscation-map=build/obfuscation.json, or pass --obfuscation-map): obfuscated names in error messages stay as they are.');
   }
+  artifacts.push(...withSources('flutter', [...new Set(files.map((f) => f.buildId))], options, logger));
   return send(connection, artifacts, options);
 }
 
@@ -199,5 +227,17 @@ export async function uploadDsyms(path: string, connection: Connection | null, o
       gzip: true,
     };
   });
+  // Swift's mangled names, decoded by this Mac's swift-demangle: crashes read "Cart.total() -> Int".
+  const names = swiftNames(images.map((image) => image.path), options.xcodeTool === undefined ? undefined : options.xcodeTool);
+  if (names && Object.keys(names).length) {
+    const data = Buffer.from(JSON.stringify({ names }), 'utf8');
+    logger.info(`With readable names for ${Object.keys(names).length} Swift symbol(s)`);
+    for (const uuid of new Set(images.map((image) => image.uuid))) {
+      artifacts.push({ kind: 'symbol-names', debugId: uuid, name: 'swift-names.json', release: options.release, data, gzip: true });
+    }
+  } else if (names === null) {
+    logger.info('Swift names stay mangled: run the upload on a Mac with Xcode (xcrun swift-demangle) to send readable ones.');
+  }
+  artifacts.push(...withSources('apple', [...new Set(images.map((image) => image.uuid))], options, logger));
   return send(connection, artifacts, options);
 }

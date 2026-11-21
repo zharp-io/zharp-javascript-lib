@@ -40,7 +40,9 @@ export function frameFile(line: string): string | undefined {
   return match ? clean(match[1]) : undefined;
 }
 
-function clean(file: string): string | undefined {
+function clean(raw: string): string | undefined {
+  // Hermes release builds (React Native) write "address at index.android.bundle": the file is the bundle.
+  const file = raw.replace(/^address at /, '');
   // `eval at fn (file:1:2), <anonymous>` and friends name no file of their own.
   if (!file || file.includes('eval at ') || file === '<anonymous>' || file === 'native') return undefined;
   return file;

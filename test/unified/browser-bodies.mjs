@@ -10,7 +10,7 @@ const consumed = [];
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url.startsWith(endpoint)) return realFetch(input, init);
-  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'x-request-id': 'req-7', 'set-cookie': 'sid=secret' } });
   if (url.includes('/api/login')) return json({ error: 'bad credentials', token: 'leaked-token', user: { email: 'a@b.test', apiKey: 'k-123' } }, 401);
   if (url.includes('/api/ok')) return json({ saved: true });
   if (url.includes('/api/big')) return new Response('x'.repeat(20000), { status: 200, headers: { 'content-type': 'text/plain' } });
@@ -30,7 +30,7 @@ Zharp.init({
 
 const login = await fetch('/api/login', {
   method: 'POST',
-  headers: { 'content-type': 'application/json' },
+  headers: { 'content-type': 'application/json', authorization: 'Bearer user-token', 'x-client': 'web' },
   body: JSON.stringify({ email: 'a@b.test', password: 'hunter2', dateOfBirth: '1990-01-01', remember: true }),
 });
 consumed.push((await login.json()).error); // the app still reads its own response

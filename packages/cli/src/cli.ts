@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { resolveConnection, UploadError, type Connection } from './api';
 import { consoleLogger } from './log';
 import { uploadDartSymbols, uploadDsyms, uploadProguard } from './native';
+import { uploadReactNative, uploadReactNativeDir } from './react-native';
 import { injectDirectory, uploadSourcemaps } from './sourcemaps';
 import { VERSION } from './version';
 import { runInit } from './init';
@@ -24,12 +25,17 @@ Usage:
   zharp dart-symbols upload <dir> --app <id>            Flutter --split-debug-info output
         [--obfuscation-map <file>]                      (and its obfuscation map)
   zharp dsym upload <path> --app <id>                   A .dSYM, or a folder of them
+  zharp react-native upload --bundle <file> --map <file> --app <id>
+                                                        A React Native release bundle's source map
+  zharp react-native upload --dir dist --app <id>       Every bundle an \`npx expo export\` wrote (EAS Update)
 
 Options:
   --app <id>          Application ID (or ZHARP_APP)
   --release <r>       Release name to file the upload under (or ZHARP_RELEASE)
   --include <glob>    Only these files (repeatable; sourcemaps)
   --exclude <glob>    Not these files (repeatable; sourcemaps)
+  --sources <dir>     The project whose sources go with the symbols (dart-symbols, dsym; default: found)
+  --no-sources        Don't upload the app's sources (errors then show code only from a linked repo)
   --delete-after      Delete .map files after uploading them
   --dry-run           Show what would happen; change and send nothing
   --url <url>         Zharp API (default ZHARP_URL or https://api.zharp.io)
@@ -55,6 +61,11 @@ async function main(argv: string[]): Promise<void> {
       release: { type: 'string' },
       uuid: { type: 'string' },
       'obfuscation-map': { type: 'string' },
+      sources: { type: 'string' },
+      bundle: { type: 'string' },
+      dir: { type: 'string' },
+      map: { type: 'string' },
+      'no-sources': { type: 'boolean' },
       include: { type: 'string', multiple: true },
       exclude: { type: 'string', multiple: true },
       'delete-after': { type: 'boolean' },
@@ -117,11 +128,24 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case 'dart-symbols upload': {
-      await uploadDartSymbols(needTarget('the --split-debug-info directory'), connect(), { release, dryRun, logger, obfuscationMap: values['obfuscation-map'] });
+      const sources = values['no-sources'] ? false : values.sources;
+      await uploadDartSymbols(needTarget('the --split-debug-info directory'), connect(), { release, dryRun, logger, obfuscationMap: values['obfuscation-map'], sources });
+      return;
+    }
+    case 'react-native upload': {
+      if (values.dir) {
+        if (!existsSync(values.dir)) fail(`${values.dir} does not exist.`);
+        await uploadReactNativeDir(values.dir, connect(), { release, dryRun, logger });
+        return;
+      }
+      if (!values.bundle || !values.map) fail('react-native upload needs --bundle <index.android.bundle | main.jsbundle> and --map <its source map>, or --dir <expo export output>.');
+      for (const file of [values.bundle!, values.map!]) if (!existsSync(file)) fail(`${file} does not exist.`);
+      await uploadReactNative(values.bundle!, values.map!, connect(), { release, dryRun, logger });
       return;
     }
     case 'dsym upload': {
-      await uploadDsyms(needTarget('a .dSYM bundle or a folder of them'), connect(), { release, dryRun, logger });
+      const sources = values['no-sources'] ? false : values.sources;
+      await uploadDsyms(needTarget('a .dSYM bundle or a folder of them'), connect(), { release, dryRun, logger, sources });
       return;
     }
     default:

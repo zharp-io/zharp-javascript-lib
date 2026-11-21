@@ -1,0 +1,31 @@
+// @zharp/react-native's Android side: starts io.zharp:android (native crashes, ANRs) under the
+// app's JavaScript, with one session for both. Linked by React Native's autolinking.
+apply plugin: 'com.android.library'
+
+// From the root project's ext { }, else gradle.properties (where an Expo app can set it), else the default.
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : (rootProject.findProperty(prop) ?: fallback)
+}
+
+android {
+    namespace "io.zharp.reactnative"
+    compileSdkVersion safeExtGet('compileSdkVersion', 35)
+    defaultConfig {
+        minSdkVersion safeExtGet('minSdkVersion', 24)
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+repositories {
+    mavenCentral()
+    google()
+}
+
+dependencies {
+    implementation 'com.facebook.react:react-android'
+    // The native SDK; an app can pin another version with ext.zharpAndroidVersion.
+    implementation "io.zharp:android:${safeExtGet('zharpAndroidVersion', '1.3.0')}"
+}

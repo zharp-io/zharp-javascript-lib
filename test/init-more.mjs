@@ -1,0 +1,149 @@
+/**
+ * `zharp init` beyond the JavaScript build tools: Express, Django, FastAPI, Flask, Laravel, Go.
+ *
+ *     node test/init-more.mjs
+ */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import assert from 'node:assert/strict';
+import * as esbuild from 'esbuild';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const pkg = join(here, '..', 'packages', 'cli');
+const tmp = mkdtempSync(join(pkg, '.test-'));
+for (const name of ['recipes', 'recipes-more', 'detect']) {
+  await esbuild.build({ entryPoints: [join(pkg, 'src', 'init', `${name}.ts`)], bundle: true, platform: 'node', format: 'esm', outfile: join(tmp, `${name}.mjs`), logLevel: 'silent' });
+}
+const { planFor } = await import(pathToFileURL(join(tmp, 'recipes.mjs')).href);
+const more = await import(pathToFileURL(join(tmp, 'recipes-more.mjs')).href);
+const { detect } = await import(pathToFileURL(join(tmp, 'detect.mjs')).href);
+const c = { application: { id: 42, name: 'shop', serviceName: 'shop', ingestKey: 'zpk_abc' }, workspace: { id: 3, name: 'W' }, uploadKey: 'zh_up', appUrl: 'u' };
+const API = 'https://api.zharp.io';
+const NL = '\n';
+
+let passed = 0;
+async function test(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`  ✓ ${name}`);
+  } catch (error) {
+    console.error(`  ✗ ${name}`);
+    rmSync(tmp, { recursive: true, force: true });
+    throw error;
+  }
+}
+function project(name, files) {
+  const dir = join(tmp, name);
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+  return detect(dir);
+}
+const change = (plan, path) => plan.changes.find((ch) => ch.path === path);
+
+console.log('\nzharp init — more frameworks');
+
+await test('Express (CommonJS): instrument.js next to the entry, required first, key in .env', () => {
+  const p = project('express-cjs', {
+    'package.json': JSON.stringify({ name: 'api', main: 'src/server.js', scripts: { start: 'node src/server.js' }, dependencies: { express: '^5.1.0' } }),
+    'src/server.js': ["const express = require('express');", 'const app = express();', 'app.listen(3000);', ''].join(NL),
+  });
+  assert.equal(p.framework, 'express');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.install, ['@zharp/node']);
+  assert.ok(change(plan, 'src/instrument.js').content.startsWith("const { Zharp } = require('@zharp/node');"));
+  assert.ok(change(plan, 'src/server.js').content.startsWith("require('./instrument');" + NL + "const express"));
+  assert.deepEqual(plan.env, { file: '.env', vars: { ZHARP_KEY: 'zpk_abc' } });
+});
+
+await test('Express (ES modules): preloaded from the start script, the entry left alone', () => {
+  const pkgText = JSON.stringify({ name: 'api', type: 'module', scripts: { start: 'node server.js', dev: 'node --watch server.js' }, dependencies: { express: '5' } }, null, 2);
+  const p = project('express-esm', { 'package.json': pkgText, 'server.js': "import express from 'express';" + NL });
+  const plan = planFor(p, c, API);
+  assert.ok(change(plan, 'instrument.js').content.startsWith("import { Zharp } from '@zharp/node';"));
+  const scripts = JSON.parse(change(plan, 'package.json').content).scripts;
+  assert.equal(scripts.start, 'node --import ./instrument.js server.js');
+  assert.equal(scripts.dev, 'node --import ./instrument.js --watch server.js');
+  assert.ok(!change(plan, 'server.js'));
+});
+
+await test('Django: zharp.init after the docstring and imports of manage.py, wsgi.py and asgi.py; added to requirements', () => {
+  const manage = ['#!/usr/bin/env python', '"""Django\'s command-line utility for administrative tasks."""', 'import os', 'import sys', '', '', 'def main():', '    pass', ''].join(NL);
+  const wsgi = ['"""', 'WSGI config for shop project.', '"""', '', 'import os', '', 'from django.core.wsgi import get_wsgi_application', '', "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'shop.settings')", 'application = get_wsgi_application()', ''].join(NL);
+  const p = project('django-app', { 'requirements.txt': 'Django==5.2' + NL, 'manage.py': manage, 'shop/wsgi.py': wsgi, 'shop/asgi.py': wsgi.replace(/WSGI|wsgi/g, 'ASGI') });
+  assert.equal(p.framework, 'django');
+  const plan = planFor(p, c, API);
+  const m = change(plan, 'manage.py').content;
+  assert.ok(m.includes('import sys' + NL + NL + 'import zharp' + NL), m);
+  assert.ok(m.includes('zharp.init(key="zpk_abc", service="shop")'));
+  assert.ok(m.indexOf('zharp.init') < m.indexOf('def main'));
+  const w = change(plan, 'shop/wsgi.py').content;
+  assert.ok(w.indexOf('zharp.init') > w.indexOf('from django.core.wsgi import') && w.indexOf('zharp.init') < w.indexOf('os.environ.setdefault'), w);
+  assert.ok(change(plan, 'shop/asgi.py'));
+  assert.equal(change(plan, 'requirements.txt').content, 'Django==5.2' + NL + 'zharp' + NL);
+  assert.equal(plan.env.file, '', 'the key is in code, no env file');
+  assert.deepEqual(plan.manual.map((x) => x.snippet), ['pip install zharp'], 'no virtualenv here: the install is left to do');
+});
+
+await test('FastAPI and Flask: the file that creates the app; a project virtualenv gets the install', () => {
+  const fast = project('fastapi-app', {
+    'requirements.txt': 'fastapi' + NL,
+    'app/main.py': ['from fastapi import FastAPI', '', 'app = FastAPI()', ''].join(NL),
+    '.venv/bin/python': '',
+  });
+  const plan = planFor(fast, c, API);
+  assert.ok(change(plan, 'app/main.py').content.startsWith('from fastapi import FastAPI' + NL + NL + 'import zharp'));
+  assert.equal(plan.commands[0].label, 'install zharp into .venv');
+  const flask = project('flask-app', { 'requirements.txt': 'Flask' + NL, 'app.py': ['from flask import Flask', 'app = Flask(__name__)', ''].join(NL) });
+  assert.ok(change(planFor(flask, c, API), 'app.py').content.includes('zharp.init('));
+});
+
+await test('Laravel: composer require, the key in .env (Laravel reads it), nothing else to edit', () => {
+  const p = project('laravel-app', { 'composer.json': JSON.stringify({ require: { 'laravel/framework': '^12.0' } }) });
+  assert.equal(p.framework, 'laravel');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['composer require zharp/zharp']);
+  assert.deepEqual(plan.env, { file: '.env', vars: { ZHARP_KEY: 'zpk_abc', ZHARP_SERVICE: 'shop' } });
+  assert.deepEqual(plan.changes, []);
+});
+
+await test('Go with Gin: Zharp started first in main(), the router traced, imports added', () => {
+  const main = ['package main', '', 'import (', '\t"net/http"', '', '\t"github.com/gin-gonic/gin"', ')', '', 'func main() {', '\tr := gin.Default()', '\tr.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })', '\tr.Run(":8080")', '}', ''].join(NL);
+  const p = project('go-gin', { 'go.mod': ['module example.com/shop', '', 'require github.com/gin-gonic/gin v1.12.0', ''].join(NL), 'main.go': main });
+  assert.equal(p.label, 'Go (Gin)');
+  const plan = planFor(p, c, API);
+  const out = change(plan, 'main.go').content;
+  // goimports' layout: "context" with the standard library, the modules with the modules.
+  assert.ok(out.includes('import (' + NL + '\t"net/http"' + NL + '\t"context"' + NL + NL + '\t"github.com/gin-gonic/gin"' + NL + '\tzharp "github.com/zharp-io/zharp-go-lib"' + NL + '\t"github.com/zharp-io/zharp-go-lib/zharpgin"' + NL + ')'), out);
+  assert.ok(out.includes('func main() {' + NL + "\t// The app's key"), out);
+  assert.ok(out.includes('shutdown := zharp.Init(zharp.Config{Key: "zpk_abc", Service: "shop"})' + NL + '\tdefer shutdown(context.Background())'));
+  assert.ok(out.includes('\tr := gin.Default()' + NL + '\tr.Use(zharpgin.Middleware())' + NL));
+  assert.deepEqual(plan.commands.map((x) => x.argv[0] + ' ' + x.argv[1]), ['go get', 'go get', 'go mod', 'gofmt -w']);
+});
+
+await test('Go with net/http: the handler given to ListenAndServe is traced', () => {
+  const main = ['package main', '', 'import (', '\t"net/http"', ')', '', 'func main() {', '\tmux := http.NewServeMux()', '\thttp.ListenAndServe(":8080", mux)', '}', ''].join(NL);
+  const out = more.editGoMain(main, c, API, { gin: false, echo: false });
+  assert.ok(out.includes('http.ListenAndServe(":8080", zharp.Handler(mux))'), out);
+  assert.ok(out.includes('\t"net/http"' + NL + '\t"context"' + NL + NL + '\tzharp "github.com/zharp-io/zharp-go-lib"' + NL + ')'), out);
+  assert.ok(more.editGoMain(main.replace('mux)', 'nil)'), c, API, { gin: false, echo: false }).includes('zharp.Handler(http.DefaultServeMux)'));
+  assert.equal(more.editGoMain(out, c, API, { gin: false, echo: false }), null, 'twice: no');
+});
+
+await test('Windows line endings (django-admin on Windows): the shebang stays first, the file keeps CRLF', () => {
+  const CRLF = '\r\n';
+  const manage = ['#!/usr/bin/env python', '"""Django\'s command-line utility for administrative tasks."""', 'import os', 'import sys', '', '', 'def main():', '    pass', ''].join(CRLF);
+  const p = project('django-crlf', { 'requirements.txt': 'Django' + CRLF, 'manage.py': manage, 'shop/wsgi.py': ['import os', 'application = None', ''].join(CRLF) });
+  const plan = planFor(p, c, API);
+  const m = change(plan, 'manage.py').content;
+  assert.ok(m.startsWith('#!/usr/bin/env python' + CRLF), m);
+  assert.ok(m.includes('import sys' + CRLF + CRLF + 'import zharp' + CRLF), m);
+  assert.ok(!/[^\r]\n/.test(m), 'every line ends in CRLF');
+  assert.equal(change(plan, 'requirements.txt').content, 'Django' + CRLF + 'zharp' + CRLF);
+});
+
+rmSync(tmp, { recursive: true, force: true });
+console.log(`\n${passed} passed`);
