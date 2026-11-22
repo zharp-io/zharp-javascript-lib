@@ -10,7 +10,10 @@ export type Framework =
   | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'unknown';
+  | 'laravel' | 'go' | RubyFramework | 'unknown';
+
+/** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
+export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
 
 /** Python frameworks set up like FastAPI and Flask: Zharp started in the module that creates the app. */
 export type PythonFramework = 'chalice' | 'sanic' | 'quart' | 'starlette' | 'falcon' | 'tornado' | 'pyramid' | 'aiohttp' | 'bottle' | 'celery' | 'rq';
@@ -54,7 +57,9 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'react-native' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'react-native' | 'otel';
+  /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
+  dotenv?: boolean;
   packageManager: 'pnpm' | 'yarn' | 'bun' | 'npm';
   typescript: boolean;
   /** Next.js: the app directory ("app" or "src/app"), when it uses the app router. */
@@ -88,6 +93,11 @@ export function detect(dir: string): Project {
   const deps: Record<string, string> = { ...(pkg?.dependencies ?? {}), ...(pkg?.devDependencies ?? {}) };
   const name = (typeof pkg?.name === 'string' && pkg.name.replace(/^@[^/]+\//, '')) || basename(dir);
   const base = { dir, name, packageManager: packageManagerOf(dir), typescript: !!deps.typescript || existsSync(join(dir, 'tsconfig.json')), packageJson: pkg ?? undefined };
+
+  // A Rails app's package.json (esbuild, Vite, React) is its front end: the app is Rails. Other
+  // Gemfiles (React Native's CocoaPods one, Sinatra next to a Node tool) are looked at last.
+  const gemfile = read(join(dir, 'Gemfile'));
+  if (gemfile !== null && isRails(dir, gemfile)) return { ...base, ...ruby(dir, gemfile) };
 
   // Before React and Node: an app with react-native depends on react too.
   if (deps.expo) return { ...base, framework: 'expo', label: `Expo${majorOf(deps.expo).replace(/^ (\d+)$/, ' SDK $1')}`, catalog: 'React Native', platform: 'react-native' };
@@ -123,6 +133,29 @@ export function detect(dir: string): Project {
     const label = router ? `Go (${router.id === 'gorilla' ? 'gorilla/mux' : router.catalog})` : 'Go';
     return { ...base, name: moduleName || basename(dir), framework: 'go', label, catalog: router?.catalog ?? 'Go', goRouter: router?.id, platform: 'go' };
   }
+  if (gemfile !== null && !deps['react-native'] && !deps.expo) return { ...base, ...ruby(dir, gemfile) };
   if (pkg) return { ...base, framework: 'node', label: 'Node.js', catalog: 'Node.js', platform: 'node' };
   return { ...base, framework: 'unknown', label: 'an unknown project', platform: 'otel' };
+}
+
+/** A gem the Gemfile asks for: gem "rails", gem 'sinatra', "~> 4.1". */
+const gem = (gemfile: string, name: string) => new RegExp(String.raw`^\s*gem\s+["']${name}["']`, 'm').test(gemfile);
+
+const isRails = (dir: string, gemfile: string) => gem(gemfile, 'rails') || existsSync(join(dir, 'config', 'application.rb'));
+
+/** Rails ("Rails" in Add app); Sinatra, Hanami, Roda, Grape and plain Rack ("Rack Middleware"); else plain Ruby ("Ruby"). */
+function ruby(dir: string, gemfile: string): Pick<Project, 'name' | 'framework' | 'label' | 'catalog' | 'platform' | 'dotenv'> {
+  const name = basename(dir);
+  const dotenv = gem(gemfile, 'dotenv(?:-rails)?');
+  const major = (gemName: string) => new RegExp(String.raw`^\s*gem\s+["']${gemName}["']\s*,\s*["'][^"'\d]*(\d+)`, 'm').exec(gemfile)?.[1];
+  if (isRails(dir, gemfile)) {
+    const v = major('rails');
+    return { name, framework: 'rails', label: `Rails${v ? ` ${v}` : ''}`, catalog: 'Rails', platform: 'ruby', dotenv };
+  }
+  const rack: [RubyFramework, string][] = [['sinatra', 'Sinatra'], ['hanami', 'Hanami'], ['roda', 'Roda'], ['grape', 'Grape']];
+  for (const [id, label] of rack) {
+    if (gem(gemfile, id)) return { name, framework: id, label, catalog: 'Rack Middleware', platform: 'ruby', dotenv };
+  }
+  if (gem(gemfile, 'rack') || existsSync(join(dir, 'config.ru'))) return { name, framework: 'rack', label: 'Rack', catalog: 'Rack Middleware', platform: 'ruby', dotenv };
+  return { name, framework: 'ruby', label: 'Ruby', catalog: 'Ruby', platform: 'ruby', dotenv };
 }

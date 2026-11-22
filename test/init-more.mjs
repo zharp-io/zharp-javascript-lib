@@ -1,5 +1,5 @@
 /**
- * `zharp init` beyond the JavaScript build tools: Express, Django, FastAPI, Flask, Laravel, Go.
+ * `zharp init` beyond the JavaScript build tools: Express, Django, FastAPI, Flask, Laravel, Go, Ruby.
  *
  *     node test/init-more.mjs
  */
@@ -203,6 +203,74 @@ await test('Go detection: the router decides the tile; the plan fetches its modu
   assert.deepEqual(plan.commands.map((x) => x.argv.slice(0, 3).join(' ')), ['go get github.com/zharp-io/zharp-go-lib@latest', 'go get github.com/zharp-io/zharp-go-lib/zharpfiber@latest', 'go mod tidy', 'gofmt -w main.go']);
   const negroni = project('go-negroni', { 'go.mod': 'module x\n\nrequire (\n\tgithub.com/gorilla/mux v1.8.1\n\tgithub.com/urfave/negroni v1.0.0\n)\n', 'main.go': 'package main\n' });
   assert.equal(negroni.catalog, 'Negroni');
+});
+
+await test('Rails: bundle add, the generator with the key into credentials; Rails tile, ruby platform', () => {
+  const p = project('rails-app', {
+    'Gemfile': 'source "https://rubygems.org"\n\ngem "rails", "~> 8.1.4"\ngem "pg"\n',
+    'config/application.rb': 'module Shop\n  class Application < Rails::Application\n  end\nend\n',
+    // jsbundling's package.json is the front end: still Rails.
+    'package.json': JSON.stringify({ name: 'app', dependencies: { react: '^19.0.0', vite: '^7.0.0' } }),
+  });
+  assert.equal(p.framework, 'rails');
+  assert.equal(p.catalog, 'Rails');
+  assert.equal(p.platform, 'ruby');
+  assert.equal(p.label, 'Rails 8');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['bundle add zharp', 'bundle exec rails generate zharp:install --key=zpk_abc']);
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.env.vars, {});
+});
+
+await test('Rails with dotenv: the key in .env, the generator without it', () => {
+  const p = project('rails-dotenv', { 'Gemfile': "gem 'rails', '~> 7.1'\ngem 'dotenv-rails', groups: [:development, :test]\n" });
+  const plan = planFor(p, c, 'http://localhost:3000');
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['bundle add zharp', 'bundle exec rails generate zharp:install']);
+  assert.deepEqual(plan.env, { file: '.env', vars: { ZHARP_KEY: 'zpk_abc', ZHARP_SERVICE: 'shop', ZHARP_ENDPOINT: 'http://localhost:3000/api/v1/otlp' } });
+});
+
+await test('Sinatra: config.ru requires zharp after its requires and uses Zharp::Rack before run; Rack Middleware tile', () => {
+  const p = project('sinatra-app', {
+    'Gemfile': "source 'https://rubygems.org'\ngem 'sinatra'\ngem 'puma'\n",
+    'config.ru': ['require "bundler/setup"', 'require_relative "app"', '', 'run App', ''].join(NL),
+  });
+  assert.equal(p.framework, 'sinatra');
+  assert.equal(p.catalog, 'Rack Middleware');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['bundle add zharp']);
+  assert.equal(change(plan, 'config.ru').content, [
+    'require "bundler/setup"',
+    'require_relative "app"',
+    'require "zharp"',
+    "# The app's key can only send data to this app, so it is safe in code.",
+    'Zharp.init(key: "zpk_abc", service: "shop")',
+    '',
+    'use Zharp::Rack',
+    'run App',
+    '',
+  ].join(NL));
+  // Run again: already set up.
+  assert.equal(more.editConfigRu(change(plan, 'config.ru').content, c, API, true), null);
+});
+
+await test('Rack with dotenv loaded in config.ru: the key in .env; Hanami and plain Rack are Rack Middleware', () => {
+  const p = project('rack-dotenv', { 'Gemfile': 'gem "rack"\ngem "dotenv"\n', 'config.ru': 'require "dotenv/load"\nrun ->(env) { [200, {}, ["ok"]] }\n' });
+  assert.equal(p.framework, 'rack');
+  const plan = planFor(p, c, API);
+  assert.equal(change(plan, 'config.ru').content, 'require "dotenv/load"\nrequire "zharp"\nuse Zharp::Rack\nrun ->(env) { [200, {}, ["ok"]] }\n');
+  assert.equal(plan.env.vars.ZHARP_KEY, 'zpk_abc');
+  assert.equal(project('hanami-app', { 'Gemfile': 'gem "hanami", "~> 2.2"\n' }).catalog, 'Rack Middleware');
+});
+
+await test("Plain Ruby: bundle add and the init snippet; Ruby tile. React Native's CocoaPods Gemfile stays React Native", () => {
+  const p = project('ruby-worker', { 'Gemfile': 'gem "sidekiq"\n' });
+  assert.equal(p.framework, 'ruby');
+  assert.equal(p.catalog, 'Ruby');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['bundle add zharp']);
+  assert.match(plan.manual[0].snippet, /Zharp\.init\(key: "zpk_abc", service: "shop"\)/);
+  const rn = project('rn-pods', { 'Gemfile': "gem 'cocoapods'\n", 'package.json': JSON.stringify({ name: 'm', dependencies: { 'react-native': '0.79.0', react: '19.0.0' } }) });
+  assert.equal(rn.framework, 'react-native');
 });
 
 rmSync(tmp, { recursive: true, force: true });
