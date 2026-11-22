@@ -432,7 +432,7 @@ function plainRuby(c: Connected, api: string): Plan {
     why: 'start Zharp after your gems are required',
     snippet: `require "zharp"\nZharp.init(key: "${c.application.ingestKey}", service: "${c.application.serviceName}"${endpoint ? `, endpoint: "${endpoint}"` : ''})`,
   });
-  plan.notes.push('A Sidekiq process outside Rails: bundle exec sidekiq -r ./your_app.rb -r zharp/sidekiq (with ZHARP_KEY set).');
+  plan.notes.push('A Sidekiq process outside Rails: require "zharp/sidekiq" at the top of the file Sidekiq loads (with ZHARP_KEY set).');
   return plan;
 }
 
