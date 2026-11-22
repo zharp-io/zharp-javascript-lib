@@ -7,7 +7,8 @@
  * key, under which service), the two processors that put user and session on everything, a
  * console bridge, error capture, and a small API in the same shape as every other Zharp SDK.
  */
-import { register as registerLoader } from 'node:module';
+import { createRequire, register as registerLoader } from 'node:module';
+import { join } from 'node:path';
 import {
   type Context,
   context,
@@ -227,6 +228,7 @@ export class ZharpNode {
       ],
     });
     this.sdk.start();
+    if (tracing) preloadCommonJsFrameworks();
     this.logger = logs.getLogger('@zharp/node', VERSION);
 
     if (correlation) this.teardowns.push(stampOutput());
@@ -541,6 +543,37 @@ function safeJson(value: unknown): string {
   }
 }
 
+/**
+ * CommonJS packages the ES module hook leaves alone. An app that `import`s them still loads them
+ * through require, where their instrumentations patch them; through the ES hook those
+ * instrumentations get the module namespace instead of the module and break it: Connect's calls
+ * the namespace as the connect() function (the app crashes at startup), Hapi's patches a copy the
+ * app never uses (no routes, no errors).
+ */
+const ESM_HOOK_EXCLUDE = ['connect', '@hapi/hapi'];
+
+/**
+ * Load those packages through require now, if the app has them: their instrumentations patch them
+ * as they load, and the app's later `import` gets the same, patched module (Node takes a
+ * CommonJS package an ES module imports from require's cache). On Node 24 an ES import of a
+ * CommonJS package doesn't go through require's hook, so without this they'd stay untraced.
+ */
+function preloadCommonJsFrameworks(): void {
+  let appRequire: NodeRequire;
+  try {
+    appRequire = createRequire(join(process.cwd(), 'noop.js'));
+  } catch {
+    return;
+  }
+  for (const name of ESM_HOOK_EXCLUDE) {
+    try {
+      appRequire(name);
+    } catch {
+      // Not installed: nothing to trace.
+    }
+  }
+}
+
 /** Register OpenTelemetry's ES module loader hook, once per process. */
 function registerEsmHook(): void {
   const g = globalThis as any;
@@ -548,7 +581,7 @@ function registerEsmHook(): void {
   g.__ZHARP_ESM_HOOK__ = true;
   try {
     // Resolved from this package, which depends on @opentelemetry/instrumentation directly.
-    registerLoader?.('@opentelemetry/instrumentation/hook.mjs', import.meta.url);
+    registerLoader?.('@opentelemetry/instrumentation/hook.mjs', import.meta.url, { data: { exclude: ESM_HOOK_EXCLUDE } });
   } catch {
     // Older Node without module.register: CommonJS is still instrumented.
   }
