@@ -1,0 +1,74 @@
+{
+  "name": "@zharp/cloudflare",
+  "version": "0.1.0",
+  "description": "Zharp Application Monitoring for Cloudflare Workers, Durable Objects and Pages Functions — errors, traces, D1 queries and logs",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "size": "node scripts/size.mjs",
+    "prepublishOnly": "pnpm run build && pnpm run typecheck"
+  },
+  "keywords": [
+    "zharp",
+    "cloudflare",
+    "cloudflare-workers",
+    "workers",
+    "durable-objects",
+    "pages-functions",
+    "hono",
+    "d1",
+    "apm",
+    "error-tracking",
+    "tracing",
+    "opentelemetry",
+    "traceparent",
+    "monitoring",
+    "observability"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zharp-io/zharp-javascript-lib.git",
+    "directory": "packages/cloudflare"
+  },
+  "homepage": "https://zharp.io/docs/sdks/cloudflare",
+  "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.9.0",
+    "@types/node": "^25.9.3",
+    "@zharp/internal": "workspace:*",
+    "hono": "^4.13.20",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.166.0"
+  }
+}
