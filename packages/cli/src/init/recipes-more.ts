@@ -9,7 +9,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import type { Project } from './detect';
+import { GO_ROUTERS, PYTHON_FRAMEWORKS, type GoRouter, type Project } from './detect';
 import type { Connected } from './connect';
 import type { Plan } from './recipes';
 
@@ -94,7 +94,7 @@ function express(project: Project, c: Connected, api: string): Plan {
   const instrumentName = ts ? 'instrument.ts' : esm ? (entry.endsWith('.mjs') ? 'instrument.mjs' : 'instrument.js') : (entry.endsWith('.cjs') ? 'instrument.cjs' : 'instrument.js');
   const instrumentPath = `${dirOf}${instrumentName}`;
   const body = [
-    '// Before anything else: http, express and the database drivers are instrumented as they load.',
+    '// Before anything else: http, the framework and the database drivers are instrumented as they load.',
     "try { process.loadEnvFile?.('.env'); } catch { /* no .env: the environment has the key */ }",
     `Zharp.init({ service: '${c.application.serviceName}' });`,
     '',
@@ -129,15 +129,32 @@ function express(project: Project, c: Connected, api: string): Plan {
 // ── Python: Django, FastAPI, Flask ───────────────────────────────────────────────
 
 /** The block that starts Zharp, for Python. */
-function pythonInit(c: Connected, api: string): string {
+function pythonInit(c: Connected, api: string, logs = false): string {
   const endpoint = otlpOf(api);
   return [
     'import zharp',
     '',
     "# The app's key can only send data to this app, so it is safe in code.",
-    `zharp.init(key="${c.application.ingestKey}", service="${c.application.serviceName}"${endpoint ? `, endpoint="${api.replace(/\/+$/, '')}/api/v1/otlp"` : ''})`,
+    `zharp.init(key="${c.application.ingestKey}", service="${c.application.serviceName}"${endpoint ? `, endpoint="${api.replace(/\/+$/, '')}/api/v1/otlp"` : ''}${logs ? ', logs=True' : ''})`,
   ].join('\n');
 }
+
+/** Where each Python framework's app is created: the file Zharp is started in. */
+const PYTHON_APP: Record<string, { marker: RegExp; where: string }> = {
+  fastapi: { marker: /\bFastAPI\(/, where: 'the file that creates FastAPI()' },
+  flask: { marker: /\bFlask\(\s*__name__/, where: 'the file that creates Flask(__name__)' },
+  chalice: { marker: /\bChalice\(/, where: 'app.py, before Chalice(...)' },
+  sanic: { marker: /\bSanic\(/, where: 'the file that creates Sanic(...)' },
+  quart: { marker: /\bQuart\(/, where: 'the file that creates Quart(__name__)' },
+  starlette: { marker: /\bStarlette\(/, where: 'the file that creates Starlette(...)' },
+  falcon: { marker: /\bfalcon\.(?:asgi\.)?(?:App|API)\(/, where: 'the file that creates falcon.App()' },
+  tornado: { marker: /\b(?:tornado\.web\.)?Application\(/, where: 'the file that creates the tornado Application' },
+  pyramid: { marker: /\bConfigurator\(/, where: 'the file that creates the Configurator' },
+  aiohttp: { marker: /\bweb\.Application\(/, where: 'the file that creates web.Application()' },
+  bottle: { marker: /\bBottle\(|\bbottle\.run\(|^\s*run\(/m, where: 'the file that creates the Bottle app' },
+  celery: { marker: /\bCelery\(/, where: 'the module that creates your Celery app' },
+  rq: { marker: /\bWorker\(|\bQueue\(/, where: 'the module your RQ worker imports' },
+};
 
 /** `block` placed after a module's docstring and its leading imports — before any other code. */
 export function afterPythonImports(text: string, block: string): string | null {
@@ -193,14 +210,15 @@ function python(project: Project, c: Connected, api: string): Plan {
   plan.changes.push(...installed.changes);
   plan.commands = installed.commands;
   plan.manual.push(...installed.manual);
-  const block = pythonInit(c, api);
+  // Chalice runs on Lambda: nothing else collects what it prints.
+  const block = pythonInit(c, api, project.framework === 'chalice');
 
   let targets: string[] = [];
   if (project.framework === 'django') {
     // runserver and the management commands start at manage.py; production at wsgi.py / asgi.py.
     targets = [first(project.dir, ['manage.py']), ...findFiles(project.dir, 'wsgi.py'), ...findFiles(project.dir, 'asgi.py')].filter((p): p is string => !!p);
   } else {
-    const marker = project.framework === 'fastapi' ? /\bFastAPI\(/ : /\bFlask\(\s*__name__/;
+    const { marker } = PYTHON_APP[project.framework];
     const files = findFiles(project.dir, '.py').filter((f) => marker.test(read(project.dir, f) ?? ''));
     const preferred = files.find((f) => /(^|\/)(main|app|server|wsgi|__init__)\.py$/.test(f)) ?? files[0];
     if (preferred) targets = [preferred];
@@ -211,7 +229,7 @@ function python(project: Project, c: Connected, api: string): Plan {
     if (edited) plan.changes.push({ path, kind: 'edit', content: edited, note: 'starts Zharp' });
   }
   if (!targets.length) {
-    const where = project.framework === 'django' ? 'manage.py, wsgi.py and asgi.py' : project.framework === 'fastapi' ? 'the file that creates FastAPI()' : 'the file that creates Flask(__name__)';
+    const where = project.framework === 'django' ? 'manage.py, wsgi.py and asgi.py' : PYTHON_APP[project.framework].where;
     plan.manual.push({ path: where, why: 'start Zharp at the top, after the imports', snippet: block });
   }
   return plan;
@@ -233,8 +251,11 @@ function laravel(project: Project, c: Connected, api: string): Plan {
 
 const GO_MODULE = 'github.com/zharp-io/zharp-go-lib';
 
+/** Which routers a Go module uses (from go.mod), for the ones with their own setup. */
+export type GoRouters = Partial<Record<GoRouter, boolean>>;
+
 /** main.go with Zharp started first in main(), and the router wrapped where its shape is known. */
-export function editGoMain(text: string, c: Connected, api: string, routers: { gin: boolean; echo: boolean }): string | null {
+export function editGoMain(text: string, c: Connected, api: string, routers: GoRouters): string | null {
   if (text.includes(GO_MODULE)) return null;
   const block = /^import \(\n([\s\S]*?)^\)/m.exec(text);
   const mainFn = /^func main\(\) \{\n/m.exec(text);
@@ -243,20 +264,39 @@ export function editGoMain(text: string, c: Connected, api: string, routers: { g
   const stdlib: string[] = [];
   if (!/^\s*"context"$/m.test(imports)) stdlib.push('\t"context"');
   const add: string[] = [`\tzharp "${GO_MODULE}"`];
-  let routerLine = '';
   let next = text;
+  /** `line` added after the first match of `after` (a whole line), with its indentation. */
+  const addAfter = (after: RegExpExecArray, line: string) => {
+    next = next.replace(after[0], `${after[0]}${after[1]}${line}\n`);
+  };
   const gin = routers.gin ? /^(\s*)(\w+) := gin\.(?:Default|New)\(\)\n/m.exec(next) : null;
   const echo = routers.echo ? /^(\s*)(\w+) := echo\.New\(\)\n/m.exec(next) : null;
+  const fiber = routers.fiber ? /^(\s*)(\w+) := fiber\.New\([^\n]*\)\n/m.exec(next) : null;
+  const iris = routers.iris ? /^(\s*)(\w+) := iris\.(?:New|Default)\(\)\n/m.exec(next) : null;
   if (gin) {
     add.push(`\t"${GO_MODULE}/zharpgin"`);
-    routerLine = `${gin[1]}${gin[2]}.Use(zharpgin.Middleware())\n`;
-    next = next.replace(gin[0], gin[0] + routerLine);
+    addAfter(gin, `${gin[2]}.Use(zharpgin.Middleware())`);
   } else if (echo) {
     add.push(`\t"${GO_MODULE}/zharpecho"`);
-    routerLine = `${echo[1]}${echo[2]}.Use(zharpecho.Middleware())\n`;
-    next = next.replace(echo[0], echo[0] + routerLine);
+    addAfter(echo, `${echo[2]}.Use(zharpecho.Middleware())`);
+  } else if (fiber) {
+    add.push(`\t"${GO_MODULE}/zharpfiber"`);
+    // After Fiber's recover middleware when there is one, so a panic reaches Zharp first and recover still answers it.
+    const recover = new RegExp(String.raw`^([ \t]*)${fiber[2]}\.Use\(recover\.New\([^\n]*\)\)\n`, 'm').exec(next);
+    addAfter(recover ?? fiber, `${fiber[2]}.Use(zharpfiber.Middleware())`);
+  } else if (iris) {
+    add.push(`\t"${GO_MODULE}/zharpiris"`);
+    addAfter(iris, `${iris[2]}.UseRouter(zharpiris.Middleware())`);
+  } else if (routers.fasthttp && /fasthttp\.ListenAndServe\(/.test(next)) {
+    add.push(`\t"${GO_MODULE}/zharpfasthttp"`);
+    next = next.replace(/fasthttp\.ListenAndServe\(([^,]+),\s*([\w.]+)\)/, (_, addr: string, handler: string) => `fasthttp.ListenAndServe(${addr}, zharpfasthttp.Handler(${handler}))`);
   } else {
-    // net/http: the handler given to ListenAndServe, traced.
+    // net/http (Negroni and gorilla/mux included): the handler given to ListenAndServe, traced.
+    const gorilla = routers.gorilla ? /^(\s*)(\w+) := mux\.NewRouter\(\)\n/m.exec(next) : null;
+    if (gorilla) {
+      add.push(`\t"${GO_MODULE}/zharpmux"`);
+      addAfter(gorilla, `${gorilla[2]}.Use(zharpmux.Middleware())`);
+    }
     next = next.replace(/http\.ListenAndServe\(([^,]+),\s*(nil|[\w.]+)\)/, (_, addr: string, handler: string) =>
       `http.ListenAndServe(${addr}, zharp.Handler(${handler === 'nil' ? 'http.DefaultServeMux' : handler}))`);
   }
@@ -290,17 +330,22 @@ function groupedImports(body: string, stdlib: string[], modules: string[]): stri
 function go(project: Project, c: Connected, api: string): Plan {
   const plan = emptyPlan(null);
   const goMod = read(project.dir, 'go.mod') ?? '';
-  const routers = { gin: /github\.com\/gin-gonic\/gin/.test(goMod), echo: /github\.com\/labstack\/echo/.test(goMod) };
+  const routers: GoRouters = Object.fromEntries(GO_ROUTERS.map((r) => [r.id, r.module.test(goMod)]));
   plan.commands = [{ label: `go get ${GO_MODULE}`, argv: ['go', 'get', `${GO_MODULE}@latest`] }];
-  if (routers.gin) plan.commands.push({ label: 'go get …/zharpgin', argv: ['go', 'get', `${GO_MODULE}/zharpgin@latest`] });
-  else if (routers.echo) plan.commands.push({ label: 'go get …/zharpecho', argv: ['go', 'get', `${GO_MODULE}/zharpecho@latest`] });
   const mainPath = first(project.dir, ['main.go', 'cmd/server/main.go', 'cmd/api/main.go', 'cmd/main.go']) ?? findFiles(project.dir, 'main.go').find((f) => /func main\(\)/.test(read(project.dir, f) ?? '')) ?? null;
   const text = mainPath ? read(project.dir, mainPath) : null;
   const edited = text ? editGoMain(text, c, api, routers) : null;
   if (mainPath && edited) {
-    plan.changes.push({ path: mainPath, kind: 'edit', content: edited, note: `starts Zharp${routers.gin ? '; traces Gin' : routers.echo ? '; traces Echo' : ''}` });
+    // The router module main.go now imports, fetched like the core.
+    const module = /"github\.com\/zharp-io\/zharp-go-lib\/(zharp\w+)"/.exec(edited)?.[1];
+    if (module) plan.commands.push({ label: `go get …/${module}`, argv: ['go', 'get', `${GO_MODULE}/${module}@latest`] });
+    const traced = { zharpgin: 'Gin', zharpecho: 'Echo', zharpfiber: 'Fiber', zharpiris: 'Iris', zharpfasthttp: 'fasthttp', zharpmux: 'gorilla/mux' }[module ?? ''];
+    plan.changes.push({ path: mainPath, kind: 'edit', content: edited, note: `starts Zharp${traced ? `; traces ${traced}` : edited.includes('zharp.Handler(') ? '; traces requests' : ''}` });
     plan.commands.push({ label: 'go mod tidy', argv: ['go', 'mod', 'tidy'] });
     plan.commands.push({ label: `gofmt -w ${mainPath}`, argv: ['gofmt', '-w', mainPath] });
+    if (!/zharp\.Handler\(|zharp\w+\.(Middleware|Handler)\(/.test(edited)) {
+      plan.manual.push({ path: mainPath, why: 'trace incoming requests: wrap the handler your server runs', snippet: routers.negroni ? 'http.ListenAndServe(":3000", zharp.Handler(n))  // instead of n.Run(":3000")' : 'http.ListenAndServe(":8080", zharp.Handler(mux))' });
+    }
   } else if (!text?.includes(GO_MODULE)) {
     plan.manual.push({ path: mainPath ?? 'main.go', why: 'start Zharp first in main()', snippet: `shutdown := zharp.Init(zharp.Config{Key: "${c.application.ingestKey}"})\ndefer shutdown(context.Background())` });
   }
@@ -310,6 +355,10 @@ function go(project: Project, c: Connected, api: string): Plan {
 export function morePlanFor(project: Project, c: Connected, api: string): Plan | null {
   switch (project.framework) {
     case 'express':
+    case 'koa':
+    case 'hapi':
+    case 'fastify':
+    case 'connect':
       return express(project, c, api);
     case 'django':
     case 'fastapi':
@@ -320,6 +369,6 @@ export function morePlanFor(project: Project, c: Connected, api: string): Plan |
     case 'go':
       return go(project, c, api);
     default:
-      return null;
+      return PYTHON_FRAMEWORKS.some((f) => f.id === project.framework) ? python(project, c, api) : null;
   }
 }

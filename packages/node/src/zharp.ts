@@ -7,7 +7,8 @@
  * key, under which service), the two processors that put user and session on everything, a
  * console bridge, error capture, and a small API in the same shape as every other Zharp SDK.
  */
-import { register as registerLoader } from 'node:module';
+import { createRequire, isBuiltin, register as registerLoader } from 'node:module';
+import { join } from 'node:path';
 import {
   type Context,
   context,
@@ -16,7 +17,9 @@ import {
   diag,
   INVALID_SPAN_CONTEXT,
   logs,
+  propagation,
   SeverityNumber,
+  SpanKind,
   SpanStatusCode,
   trace,
   type Logger,
@@ -25,7 +28,7 @@ import {
   type Span,
   type SpanOptions,
 } from '@opentelemetry/api';
-import { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } from '@opentelemetry/core';
+import { CompositePropagator, unsuppressTracing, W3CBaggagePropagator, W3CTraceContextPropagator } from '@opentelemetry/core';
 import { envDetector, hostDetector, resourceFromAttributes } from '@opentelemetry/resources';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import {
@@ -55,6 +58,23 @@ import { captureOutput, SentLineProcessor, stampOutput } from './stdout';
 import { DebugIdLogProcessor, DebugIdSpanProcessor } from './debug-ids';
 import { asError, exceptionAttributes, SEVERITY, type Level } from './errors';
 import type { Attributes, NodeOptions, ZharpUser } from './types';
+import {
+  azureInvocation,
+  azureStatus,
+  DEFAULT_FLUSH_MS,
+  gcfEventInvocation,
+  gcfHttpInvocation,
+  headerGetter,
+  isHttpPair,
+  isStreamingLambda,
+  lambdaInvocation,
+  lambdaStatus,
+  sameShape,
+  serverlessName,
+  serverlessResource,
+  type Invocation,
+  type ServerlessOptions,
+} from './serverless';
 import { VERSION } from './version';
 
 export const DEFAULT_ENDPOINT = 'https://api.zharp.io/api/v1/otlp';
@@ -77,6 +97,13 @@ export class ZharpNode {
   private readonly reported = new WeakSet<object>();
   /** Failed queries waiting to be reported, once and with their call site. */
   private dbErrors: DbErrorSpanProcessor | null = null;
+  /** No invocation has run in this process yet: the next one is the cold start. */
+  private cold = true;
+  /**
+   * A Cloud Function is wrapped: its wrapper makes each request's span (and flushes before the
+   * response), so the http server instrumentation leaves incoming requests alone.
+   */
+  private wrapsHttp = false;
 
   /** `Zharp.log.info("Order placed", { orderId })` — and debug, warn, error, fatal, trace. */
   readonly log: Record<Level, LogFn> = {
@@ -120,7 +147,7 @@ export class ZharpNode {
       warn('No key found — pass Zharp.init({ key }) or set ZHARP_API_KEY. Nothing will be sent.');
       return;
     }
-    const service = pick(options.service, nodeEnv('ZHARP_SERVICE'), nodeEnv('OTEL_SERVICE_NAME'), packageName()) ?? 'node-app';
+    const service = pick(options.service, nodeEnv('ZHARP_SERVICE'), nodeEnv('OTEL_SERVICE_NAME'), packageName(), serverlessName()) ?? 'node-app';
     const environment = pick(options.environment, nodeEnv('ZHARP_ENV'), nodeEnv('NODE_ENV'));
     const release = pick(options.release, nodeEnv('ZHARP_RELEASE'), nodeEnv('ZHARP_VERSION'));
     const endpoint = (pick(options.endpoint, nodeEnv('ZHARP_ENDPOINT')) ?? DEFAULT_ENDPOINT).replace(/\/+$/, '');
@@ -184,6 +211,8 @@ export class ZharpNode {
       'telemetry.sdk.version': VERSION,
       'process.runtime.name': 'nodejs',
       'process.runtime.version': process.versions.node,
+      // Lambda, Azure Functions, Cloud Functions: cloud.provider, cloud.platform, faas.name…
+      ...serverlessResource(),
     });
 
     const propagator = new CompositePropagator({
@@ -191,11 +220,12 @@ export class ZharpNode {
     });
     const bodies = bodySettings(options.captureBodies, nodeEnv('ZHARP_CAPTURE_BODIES'));
     const headerCapture = headerSettings(options.captureHeaders, nodeEnv('ZHARP_CAPTURE_HEADERS'));
-    const ownHttp = options.instrumentations?.['@opentelemetry/instrumentation-http'] as any;
+    const ownHttp = this.withWrappedRequests(options.instrumentations?.['@opentelemetry/instrumentation-http'] as any);
     const withBodies = bodies ? withBodyCapture(bodies, ownHttp) : ownHttp;
     const httpConfig = headerCapture ? withHeaderCapture(headerCapture, withBodies) : withBodies;
     const rate = typeof options.sampleRate === 'number' ? Math.min(1, Math.max(0, options.sampleRate)) : 1;
 
+    let instrumentations: any[] = [];
     this.sdk = new NodeSDK({
       resource,
       // Host and OTEL_RESOURCE_ATTRIBUTES only. The process detector would send the command line,
@@ -207,26 +237,32 @@ export class ZharpNode {
       logRecordProcessors: this.logProcessors,
       // Without this the SDK would start an OTLP metrics exporter pointed at localhost:4318.
       metricReaders: [],
-      instrumentations: [
+      instrumentations: (instrumentations = [
         ...(tracing
           ? getNodeAutoInstrumentations({
               // A span per DNS lookup, socket and file read buries the requests that matter.
               '@opentelemetry/instrumentation-dns': { enabled: false },
               '@opentelemetry/instrumentation-net': { enabled: false },
               '@opentelemetry/instrumentation-fs': { enabled: false },
+              // Zharp.lambda() makes the invocation's span and flushes before returning; this one
+              // would wrap the handler again (a second span) from _HANDLER, when it can find it.
+              '@opentelemetry/instrumentation-aws-lambda': { enabled: false },
               ...options.instrumentations,
               ...bridges,
               ...(httpConfig && { '@opentelemetry/instrumentation-http': httpConfig as any }),
             })
-          : logsOnlyInstrumentations({ ...options, instrumentations: { ...options.instrumentations, ...bridges } })),
+          : logsOnlyInstrumentations({ ...options, instrumentations: { ...options.instrumentations, ...bridges, '@opentelemetry/instrumentation-http': ownHttp } })),
         ...(this.dbErrors ? [new DbDriverErrorsInstrumentation((traceId, error) => this.dbErrors?.attach(traceId, error))] : []),
         ...(tracing && options.captureUncaught !== false
           ? [new FrameworkErrorsInstrumentation((error, mechanism) => this.report(error, false, 'error', { 'zharp.mechanism': mechanism }, true))]
           : []),
         ...(options.extraInstrumentations ?? []),
-      ],
+      ]),
     });
     this.sdk.start();
+    if (tracing) preloadCommonJsFrameworks();
+    // Bun runs no require hooks, so nothing would be patched as it loads: patch it now instead.
+    if (isBun()) patchWithoutHooks(instrumentations);
     this.logger = logs.getLogger('@zharp/node', VERSION);
 
     if (correlation) this.teardowns.push(stampOutput());
@@ -347,6 +383,233 @@ export class ZharpNode {
   async flush(timeoutMs = 5_000): Promise<void> {
     const all = Promise.all([...this.spanProcessors, ...this.logProcessors].map((p) => p.forceFlush().catch(() => {})));
     await Promise.race([all, new Promise((resolve) => setTimeout(resolve, timeoutMs).unref())]);
+  }
+
+  // ── serverless ────────────────────────────────────────────────────────
+  //
+  // Each wrapper returns a function of the same shape as the handler: same arguments, same
+  // result. Every invocation is one SERVER span (continuing the caller's trace when the trigger
+  // carries a `traceparent`), an error the handler throws is reported once and thrown on, and
+  // everything is flushed — within `flushTimeout` — before the result goes back, because the
+  // platform freezes the process as soon as it has it.
+
+  /**
+   * An AWS Lambda handler (async, callback, or `awslambda.streamifyResponse`):
+   *
+   *     export const handler = Zharp.lambda(async (event, context) => { … });
+   */
+  lambda<H extends (...args: any[]) => any>(handler: H, options: ServerlessOptions = {}): H {
+    const self = this;
+    const streaming = isStreamingLambda(handler);
+    return sameShape(function zharpLambda(this: unknown, ...args: any[]) {
+      if (!self.sdk) return handler.apply(this, args);
+      const event = args[0];
+      const ctx = streaming ? args[2] : args[1];
+      const budget = () => {
+        const limit = options.flushTimeout ?? DEFAULT_FLUSH_MS;
+        const left = typeof ctx?.getRemainingTimeInMillis === 'function' ? Number(ctx.getRemainingTimeInMillis()) : NaN;
+        return Number.isFinite(left) ? Math.max(0, Math.min(limit, left - 100)) : limit;
+      };
+      const invocation = lambdaInvocation(event, ctx, self.takeColdstart());
+      const callback = !streaming && handler.length >= 3 ? 2 : null;
+      return self.runInvocation(invocation, budget, (result) => (invocation.http ? lambdaStatus(result, event) : undefined), handler, this, args, callback);
+    }, handler);
+  }
+
+  /**
+   * An Azure Functions handler, v4 programming model (`(request, context)`, any trigger) or v3
+   * (`(context, req)`):
+   *
+   *     app.http('orders', { handler: Zharp.azureFunction(async (request, context) => { … }) });
+   */
+  azureFunction<H extends (...args: any[]) => any>(handler: H, options: ServerlessOptions = {}): H {
+    const self = this;
+    return sameShape(function zharpAzureFunction(this: unknown, ...args: any[]) {
+      if (!self.sdk) return handler.apply(this, args);
+      const invocation = azureInvocation(args, self.takeColdstart());
+      if (!invocation) return handler.apply(this, args);
+      const budget = () => options.flushTimeout ?? DEFAULT_FLUSH_MS;
+      return self.runInvocation(invocation, budget, (result) => (invocation.http ? azureStatus(result, args) : undefined), handler, this, args, null);
+    }, handler);
+  }
+
+  /**
+   * A Google Cloud Function: an HTTP function `(req, res)`, a CloudEvent function `(cloudEvent)`,
+   * or a background function `(data, context)`.
+   *
+   *     functions.http('orders', Zharp.cloudFunction((req, res) => { … }));
+   *
+   * An HTTP function's response is held until everything is sent — Cloud Functions may stop
+   * the instance's CPU the moment the response is out.
+   */
+  cloudFunction<H extends (...args: any[]) => any>(handler: H, options: ServerlessOptions = {}): H {
+    const self = this;
+    // The wrapper makes the request's span from here on, so the http server one would be a second.
+    this.wrapsHttp = true;
+    const budget = () => options.flushTimeout ?? DEFAULT_FLUSH_MS;
+    return sameShape(function zharpCloudFunction(this: unknown, ...args: any[]) {
+      if (!self.sdk) return handler.apply(this, args);
+      if (isHttpPair(args[0], args[1])) return self.runHttpFunction(gcfHttpInvocation(args[0], self.takeColdstart()), budget, handler, this, args);
+      const cloudEvent = args[0] && typeof args[0] === 'object' && typeof args[0].specversion === 'string';
+      const callback = cloudEvent ? (handler.length >= 2 ? 1 : null) : handler.length >= 3 ? 2 : null;
+      return self.runInvocation(gcfEventInvocation(args, self.takeColdstart()), budget, () => undefined, handler, this, args, callback);
+    }, handler);
+  }
+
+  /** The first invocation in the process is the cold start (not under provisioned concurrency). */
+  private takeColdstart(): boolean {
+    if (!this.cold) return false;
+    this.cold = false;
+    return process.env.AWS_LAMBDA_INITIALIZATION_TYPE !== 'provisioned-concurrency';
+  }
+
+  /** The http instrumentation's config, leaving incoming requests to a wrapped Cloud Function. */
+  private withWrappedRequests(config: Record<string, any> | undefined): Record<string, any> {
+    const own = config?.ignoreIncomingRequestHook;
+    return {
+      ...config,
+      ignoreIncomingRequestHook: (request: unknown) => this.wrapsHttp || !!own?.(request),
+    };
+  }
+
+  /** The invocation's span, in a context of its own: the caller's trace, or a new one. */
+  private beginInvocation(invocation: Invocation): { span: Span; ctx: Context } {
+    // A request the http instrumentation was told to leave alone runs with tracing suppressed.
+    let base = unsuppressTracing(context.active());
+    if (invocation.carrier) base = propagation.extract(base, invocation.carrier, headerGetter);
+    const span = trace.getTracer('@zharp/node', VERSION).startSpan(invocation.name, { kind: SpanKind.SERVER, attributes: invocation.attributes }, base);
+    return { span, ctx: trace.setSpan(base, span) };
+  }
+
+  /** Report what the handler threw, in its invocation, and fail the span. Once per error. */
+  private invocationFailed(span: Span, ctx: Context, invocation: Invocation, error: unknown): void {
+    try {
+      context.with(ctx, () => this.report(error, false, 'error', { 'zharp.mechanism': invocation.mechanism }));
+      const e = asError(error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: e.message });
+      span.setAttribute('error.type', e.name || 'Error');
+    } catch {
+      // Never throw into the function.
+    }
+  }
+
+  /** End the invocation's span, then send everything waiting, within the budget. */
+  private async endInvocation(span: Span, status: number | undefined, budgetMs: number): Promise<void> {
+    try {
+      if (status !== undefined) {
+        span.setAttribute('http.response.status_code', status);
+        if (status >= 500) span.setStatus({ code: SpanStatusCode.ERROR });
+      }
+      span.end();
+    } catch {
+      // As above.
+    }
+    if (budgetMs > 0) await this.flush(budgetMs).catch(() => {});
+  }
+
+  /**
+   * Run a handler as one invocation. Its result (a value, a promise, or what it passes to its
+   * callback) comes back unchanged — after the span has ended and been flushed.
+   */
+  private runInvocation(
+    invocation: Invocation,
+    budget: () => number,
+    statusOf: (result: unknown) => number | undefined,
+    handler: (...args: any[]) => any,
+    thisArg: unknown,
+    args: any[],
+    callbackIndex: number | null,
+  ): unknown {
+    let span: Span;
+    let ctx: Context;
+    try {
+      ({ span, ctx } = this.beginInvocation(invocation));
+    } catch {
+      return handler.apply(thisArg, args);
+    }
+    let done: Promise<void> | null = null;
+    const finish = (failed: boolean, error: unknown, result: unknown): Promise<void> => {
+      if (done) return done;
+      if (failed) this.invocationFailed(span, ctx, invocation, error);
+      let status: number | undefined;
+      try {
+        status = failed ? undefined : statusOf(result);
+      } catch {
+        status = undefined;
+      }
+      return (done = this.endInvocation(span, status, budget()));
+    };
+
+    const usesCallback = callbackIndex !== null && typeof args[callbackIndex] === 'function';
+    if (usesCallback) {
+      const index = callbackIndex!;
+      const callback = args[index];
+      args = [...args];
+      args[index] = function (this: unknown, error?: unknown, ...rest: unknown[]) {
+        const failed = error !== undefined && error !== null;
+        finish(failed, error, rest[0]).then(() => callback.call(this, error, ...rest));
+      };
+    }
+
+    let result: any;
+    try {
+      result = context.with(ctx, () => handler.apply(thisArg, args));
+    } catch (error) {
+      return finish(true, error, undefined).then(() => {
+        throw error;
+      });
+    }
+    if (result && typeof result.then === 'function') {
+      return Promise.resolve(result).then(
+        (value) => finish(false, undefined, value).then(() => value),
+        (error) =>
+          finish(true, error, undefined).then(() => {
+            throw error;
+          }),
+      );
+    }
+    // A callback handler finishes when it calls back.
+    if (usesCallback) return result;
+    return finish(false, undefined, result).then(() => result);
+  }
+
+  /**
+   * An HTTP function `(req, res)`: the invocation ends with the response. `res.end` is held
+   * until the span has ended and everything is flushed, then goes out as the handler wrote it.
+   */
+  private runHttpFunction(invocation: Invocation, budget: () => number, handler: (...args: any[]) => any, thisArg: unknown, args: any[]): unknown {
+    const self = this;
+    let span: Span;
+    let ctx: Context;
+    try {
+      ({ span, ctx } = this.beginInvocation(invocation));
+    } catch {
+      return handler.apply(thisArg, args);
+    }
+    const res = args[1];
+    const end = res.end;
+    res.end = function zharpEnd(...endArgs: unknown[]) {
+      res.end = end;
+      const status = typeof res.statusCode === 'number' ? res.statusCode : undefined;
+      const send = () => end.apply(res, endArgs);
+      self.endInvocation(span, status, budget()).then(send, send);
+      return res;
+    };
+    const failed = (error: unknown) => this.invocationFailed(span, ctx, invocation, error);
+    let result: any;
+    try {
+      result = context.with(ctx, () => handler.apply(thisArg, args));
+    } catch (error) {
+      failed(error);
+      throw error;
+    }
+    if (result && typeof result.then === 'function') {
+      return Promise.resolve(result).then(undefined, (error) => {
+        failed(error);
+        throw error;
+      });
+    }
+    return result;
   }
 
   /** Flush, stop, and put back everything that was patched. */
@@ -541,17 +804,126 @@ function safeJson(value: unknown): string {
   }
 }
 
-/** Register OpenTelemetry's ES module loader hook, once per process. */
+/**
+ * CommonJS packages the ES module hook leaves alone. An app that `import`s them still loads them
+ * through require, where their instrumentations patch them; through the ES hook those
+ * instrumentations get the module namespace instead of the module and break it: Connect's calls
+ * the namespace as the connect() function (the app crashes at startup), Hapi's patches a copy the
+ * app never uses (no routes, no errors).
+ */
+const ESM_HOOK_EXCLUDE = ['connect', '@hapi/hapi'];
+
+/**
+ * Load those packages through require now, if the app has them: their instrumentations patch them
+ * as they load, and the app's later `import` gets the same, patched module (Node takes a
+ * CommonJS package an ES module imports from require's cache). On Node 24 an ES import of a
+ * CommonJS package doesn't go through require's hook, so without this they'd stay untraced.
+ */
+function preloadCommonJsFrameworks(): void {
+  let appRequire: NodeRequire;
+  try {
+    appRequire = createRequire(join(process.cwd(), 'noop.js'));
+  } catch {
+    return;
+  }
+  for (const name of ESM_HOOK_EXCLUDE) {
+    try {
+      appRequire(name);
+    } catch {
+      // Not installed: nothing to trace.
+    }
+  }
+}
+
+const isBun = () => typeof (globalThis as any).Bun !== 'undefined';
+
+/**
+ * Bun has no require hooks for OpenTelemetry to patch modules as they load. Load each module an
+ * instrumentation covers (node:http, express, koa…) — the ones the app has — and patch it in
+ * place. The app's own require or import then gets the same, patched module object.
+ */
+function patchWithoutHooks(instrumentations: any[]): void {
+  let appRequire: NodeRequire;
+  try {
+    appRequire = createRequire(join(process.cwd(), 'noop.js'));
+  } catch {
+    return;
+  }
+  for (const instrumentation of instrumentations) {
+    let definitions: any[] = [];
+    // Bun's require hook fired on its own copy of node:http, so the HTTP instrumentation thinks
+    // it's done ("_httpPatched") and would skip the module the app actually uses.
+    for (const flag of ['_httpPatched', '_httpsPatched']) if (instrumentation && flag in instrumentation) instrumentation[flag] = false;
+    try {
+      definitions = instrumentation?.getModuleDefinitions?.() ?? [];
+    } catch {
+      continue;
+    }
+    for (const definition of definitions) {
+      let exported: unknown;
+      try {
+        exported = appRequire(definition.name);
+      } catch {
+        continue; // not installed
+      }
+      let version: string | undefined;
+      try {
+        version = definition.name.includes(':') || !definition.name.includes('/') && isBuiltin(definition.name) ? process.versions.node : appRequire(`${definition.name}/package.json`).version;
+      } catch {
+        version = undefined;
+      }
+      try {
+        definition.patch?.(exported, version);
+      } catch {
+        // An instrumentation that can't patch this version leaves it alone.
+      }
+      for (const file of definition.files ?? []) {
+        try {
+          file.patch?.(appRequire(file.name), version);
+        } catch {
+          // A file this version doesn't have.
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Register OpenTelemetry's ES module loader hook, once per process.
+ *
+ * Only the modules an instrumentation hooks (node:http, pg, express…) go through it — they are
+ * added as each instrumentation is enabled, which init() does before the app's first import.
+ * Wrapping every module instead breaks the app: the wrapper takes a copy of a module's exports,
+ * so an exported binding the module later reassigns stays stale for its importers. Bundled
+ * servers (SvelteKit, Nuxt, Astro, Remix…) do exactly that, and every request failed.
+ */
 function registerEsmHook(): void {
   const g = globalThis as any;
   if (g.__ZHARP_ESM_HOOK__) return;
   g.__ZHARP_ESM_HOOK__ = true;
   try {
     // Resolved from this package, which depends on @opentelemetry/instrumentation directly.
-    registerLoader?.('@opentelemetry/instrumentation/hook.mjs', import.meta.url);
+    registerLoader?.('@opentelemetry/instrumentation/hook.mjs', import.meta.url, esmHookOptions() as any);
   } catch {
     // Older Node without module.register: CommonJS is still instrumented.
   }
+}
+
+/** The loader's options: include only what an instrumentation hooks, if this version can. */
+function esmHookOptions(): { data: Record<string, unknown>; transferList?: unknown[] } {
+  try {
+    // The copy of import-in-the-middle the instrumentations use: their hooks reach the loader
+    // through the channel it creates.
+    const otel = createRequire(createRequire(import.meta.url).resolve('@opentelemetry/instrumentation'));
+    const { createAddHookMessageChannel } = otel('import-in-the-middle');
+    if (typeof createAddHookMessageChannel === 'function') {
+      const { registerOptions } = createAddHookMessageChannel();
+      return { data: { ...registerOptions.data, exclude: ESM_HOOK_EXCLUDE }, transferList: registerOptions.transferList };
+    }
+  } catch {
+    // Fall back to wrapping everything but the exclusions.
+  }
+  return { data: { exclude: ESM_HOOK_EXCLUDE } };
 }
 
 /**

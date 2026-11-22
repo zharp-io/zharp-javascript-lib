@@ -145,5 +145,65 @@ await test('Windows line endings (django-admin on Windows): the shebang stays fi
   assert.equal(change(plan, 'requirements.txt').content, 'Django' + CRLF + 'zharp' + CRLF);
 });
 
+await test('Koa, Hapi, Fastify, Connect: set up like Express, created as their Add app tile', () => {
+  for (const [dep, catalog] of [['koa', 'Koa'], ['@hapi/hapi', 'Hapi'], ['fastify', 'Fastify'], ['connect', 'Connect']]) {
+    const p = project(`node-${catalog}`, {
+      'package.json': JSON.stringify({ name: 'api', main: 'server.js', scripts: { start: 'node server.js' }, dependencies: { [dep]: '^5.0.0' } }),
+      'server.js': [`const app = require('${dep}');`, ''].join(NL),
+    });
+    assert.equal(p.catalog, catalog);
+    assert.equal(p.platform, 'node');
+    const plan = planFor(p, c, API);
+    assert.deepEqual(plan.install, ['@zharp/node'], catalog);
+    assert.ok(change(plan, 'server.js').content.startsWith("require('./instrument');"), catalog);
+  }
+});
+
+await test('Python frameworks beyond Django/FastAPI/Flask: Zharp starts in the file that creates the app', () => {
+  const cases = [
+    ['chalice', 'Chalice', 'app.py', 'from chalice import Chalice\n\napp = Chalice(app_name="orders")\n'],
+    ['sanic', 'Sanic', 'server.py', 'from sanic import Sanic\n\napp = Sanic("shop")\n'],
+    ['starlette', 'Starlette', 'main.py', 'from starlette.applications import Starlette\n\napp = Starlette()\n'],
+    ['falcon', 'Falcon', 'app.py', 'import falcon\n\napp = falcon.App()\n'],
+    ['aiohttp', 'AIOHTTP', 'main.py', 'from aiohttp import web\n\napp = web.Application()\n'],
+    ['celery', 'Celery', 'tasks.py', 'from celery import Celery\n\napp = Celery("shop")\n'],
+  ];
+  for (const [req, catalog, file, code] of cases) {
+    const p = project(`py-${req}`, { 'requirements.txt': `${req}\n`, [file]: code, 'helpers.py': 'import os\n' });
+    assert.equal(p.framework, req);
+    assert.equal(p.catalog, catalog);
+    const plan = planFor(p, c, API);
+    const edited = change(plan, file);
+    assert.ok(edited, `${catalog}: ${file} edited`);
+    assert.ok(edited.content.indexOf('zharp.init(') < edited.content.indexOf('app = '), `${catalog}: before the app`);
+    assert.equal(!!change(plan, 'helpers.py'), false);
+    assert.equal(edited.content.includes('logs=True'), req === 'chalice', `${catalog}: logs only for Chalice`);
+  }
+});
+
+await test('Go: Fiber after its recover middleware, Iris on the router, fasthttp handler wrapped, gorilla/mux named', () => {
+  const head = (imp) => ['package main', '', 'import (', ...imp.map((i) => `\t"${i}"`), ')', '', 'func main() {'];
+  const fiber = more.editGoMain([...head(['github.com/gofiber/fiber/v2']), '\tapp := fiber.New()', '\tapp.Use(recover.New())', '\tapp.Listen(":3000")', '}', ''].join(NL), c, API, { fiber: true });
+  assert.ok(fiber.includes('\tapp.Use(recover.New())' + NL + '\tapp.Use(zharpfiber.Middleware())' + NL), fiber);
+  assert.ok(fiber.includes('"github.com/zharp-io/zharp-go-lib/zharpfiber"'));
+  const iris = more.editGoMain([...head(['github.com/kataras/iris/v12']), '\tapp := iris.New()', '\tapp.Listen(":8080")', '}', ''].join(NL), c, API, { iris: true });
+  assert.ok(iris.includes('\tapp := iris.New()' + NL + '\tapp.UseRouter(zharpiris.Middleware())' + NL), iris);
+  const fast = more.editGoMain([...head(['github.com/valyala/fasthttp']), '\tfasthttp.ListenAndServe(":8080", r.Handler)', '}', ''].join(NL), c, API, { fasthttp: true });
+  assert.ok(fast.includes('fasthttp.ListenAndServe(":8080", zharpfasthttp.Handler(r.Handler))'), fast);
+  const gorilla = more.editGoMain([...head(['net/http', 'github.com/gorilla/mux']), '\tr := mux.NewRouter()', '\thttp.ListenAndServe(":8080", r)', '}', ''].join(NL), c, API, { gorilla: true });
+  assert.ok(gorilla.includes('\tr := mux.NewRouter()' + NL + '\tr.Use(zharpmux.Middleware())' + NL), gorilla);
+  assert.ok(gorilla.includes('http.ListenAndServe(":8080", zharp.Handler(r))'), gorilla);
+});
+
+await test('Go detection: the router decides the tile; the plan fetches its module', () => {
+  const p = project('go-fiber', { 'go.mod': 'module example.com/shop\n\nrequire github.com/gofiber/fiber/v2 v2.52.0\n', 'main.go': ['package main', '', 'import (', '\t"github.com/gofiber/fiber/v2"', ')', '', 'func main() {', '\tapp := fiber.New()', '\tapp.Listen(":3000")', '}', ''].join(NL) });
+  assert.equal(p.catalog, 'Fiber');
+  assert.equal(p.label, 'Go (Fiber)');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.slice(0, 3).join(' ')), ['go get github.com/zharp-io/zharp-go-lib@latest', 'go get github.com/zharp-io/zharp-go-lib/zharpfiber@latest', 'go mod tidy', 'gofmt -w main.go']);
+  const negroni = project('go-negroni', { 'go.mod': 'module x\n\nrequire (\n\tgithub.com/gorilla/mux v1.8.1\n\tgithub.com/urfave/negroni v1.0.0\n)\n', 'main.go': 'package main\n' });
+  assert.equal(negroni.catalog, 'Negroni');
+});
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${passed} passed`);
