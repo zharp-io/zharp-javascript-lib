@@ -17,7 +17,7 @@
  */
 import { record } from 'rrweb';
 import type { eventWithTime } from '@rrweb/types';
-import { MAX_BODY_BYTES, MAX_KEEPALIVE_BYTES, post, retryable, split } from '../transport';
+import { MAX_BODY_BYTES, MAX_KEEPALIVE_BYTES, post, retryable, sendOnHide, split } from '../transport';
 import type { ReplayMode } from '../session';
 import type { RecorderLike, RecorderModule, ReplayHost } from './host';
 import type { ReplayEvent } from '../types';
@@ -109,12 +109,7 @@ class Recorder implements RecorderLike {
     this.cut(MAX_KEEPALIVE_BYTES);
     const batches = this.pending;
     this.pending = [];
-    for (const batch of batches) {
-      const keepalive = batch.body.length <= MAX_KEEPALIVE_BYTES;
-      post(this.host.endpoint, 'replays', batch.body, keepalive).then((status) => {
-        if (keepalive && status === 0) post(this.host.endpoint, 'replays', batch.body);
-      });
-    }
+    for (const batch of batches) sendOnHide(this.host.endpoint, 'replays', batch.body);
   }
 
   async stop(): Promise<void> {
