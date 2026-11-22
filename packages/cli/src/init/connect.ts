@@ -49,7 +49,7 @@ export async function connect(api: string, project: Project, hooks: ConnectHooks
   const opened = await http(`${base}/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'user-agent': `zharp-cli/${VERSION}` },
-    body: JSON.stringify({ name: project.name, framework: project.label, platform: project.platform, os: OS_NAMES[osPlatform()] ?? `${osPlatform()} ${release()}`, cliVersion: VERSION }),
+    body: JSON.stringify({ name: project.name, framework: project.label, catalog: project.catalog, platform: project.platform, os: OS_NAMES[osPlatform()] ?? `${osPlatform()} ${release()}`, cliVersion: VERSION }),
   }).catch((error) => {
     throw new SetupFailed(`Could not reach Zharp at ${api} (${error?.cause?.code ?? error?.message ?? error}).`);
   });
