@@ -11,6 +11,7 @@ import type { Project } from './detect';
 import type { Connected } from './connect';
 import { morePlanFor, type Command } from './recipes-more';
 import { reactNativePlanFor } from './recipes-rn';
+import { pagesPlan, workersPlan } from './recipes-cloudflare';
 
 export interface Change {
   path: string;
@@ -345,6 +346,10 @@ function basePlanFor(project: Project, c: Connected, api: string): Plan | null {
       return viteReact(project, c, api);
     case 'nestjs':
       return nestjs(project, c, api);
+    case 'cloudflare-workers':
+      return workersPlan(project, c, api, project.wranglerConfig ?? 'wrangler.jsonc');
+    case 'cloudflare-pages':
+      return pagesPlan(project, c, api, project.wranglerConfig ?? null);
     default:
       return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api);
   }
@@ -363,4 +368,6 @@ export const GUIDES: Record<string, string> = {
   rack: 'https://zharp.io/docs/sdks/ruby',
   ruby: 'https://zharp.io/docs/sdks/ruby',
   dotnet: 'https://zharp.io/docs/sdks/dotnet',
+  'cloudflare-workers': 'https://zharp.io/docs/sdks/cloudflare',
+  'cloudflare-pages': 'https://zharp.io/docs/sdks/cloudflare',
 };
