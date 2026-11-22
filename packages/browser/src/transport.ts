@@ -27,6 +27,8 @@ export interface Endpoint {
   key: string;
   /** The page's fetch as it was before instrumentation, so the SDK never traces itself. */
   fetch: typeof fetch;
+  /** What the warning for a rejected key tells the developer to check. Default: the page's init call. */
+  rejectedHint?: string;
 }
 
 /** Shared by every sender on a page: one rejected key stops all of them, with one warning. */
@@ -63,7 +65,7 @@ export async function post(endpoint: Endpoint, signal: Signal, body: string, kee
     if (response.status === 401 || response.status === 403) {
       if (!keyRejected) {
         keyRejected = true;
-        console.warn(`[Zharp] The key was rejected (HTTP ${response.status}); nothing more will be sent from this page. Check Zharp.init({ key }) and the app's allowed origins.`);
+        console.warn(`[Zharp] The key was rejected (HTTP ${response.status}); ${endpoint.rejectedHint ?? "nothing more will be sent from this page. Check Zharp.init({ key }) and the app's allowed origins."}`);
       }
     }
     return response.status;
@@ -133,6 +135,11 @@ export class Exporter<T> {
     private readonly signal: 'traces' | 'logs',
     /** Wraps records in the export request: resource, scope, and the signal's envelope. */
     private readonly wrap: (records: T[]) => unknown,
+    /**
+     * Send on a timer. Where nothing runs between requests (a Cloudflare Worker) there are no
+     * timers: the caller flushes at the end of each request, and what failed waits for the next.
+     */
+    private readonly timers = true,
   ) {}
 
   add(record: T): void {
@@ -159,7 +166,7 @@ export class Exporter<T> {
   }
 
   private schedule(ms: number): void {
-    if (this.timer) return;
+    if (this.timer || !this.timers) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       this.flush();
