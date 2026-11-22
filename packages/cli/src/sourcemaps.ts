@@ -2,6 +2,7 @@
  * Source maps for JavaScript: inject debug IDs into a build's output, upload each file and its
  * map, and delete the maps so they are not served.
  */
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { eachLimit, uploadArtifact, type Connection } from './api';
@@ -141,9 +142,16 @@ export async function uploadSourcemaps(dir: string, connection: Connection | nul
   const files = findSourceFiles(dir, options);
   const result: UploadResult = { files: 0, artifacts: 0, bytes: 0, deleted: [], skipped: [] };
   const work: Array<{ source: SourceFile; debugId: string; code: Buffer; map: Buffer }> = [];
+  let byRelease = 0;
   for (const source of files) {
     const code = readFileSync(source.file);
-    const debugId = existingDebugId(code.toString('utf8'));
+    let debugId = existingDebugId(code.toString('utf8'));
+    if (!debugId && options.release) {
+      // No debug ID (a Worker deployed by Wrangler): filed under the release, and found by it and
+      // the file's name. The ID is the file's content, so uploading it again replaces it.
+      debugId = contentDebugId(code);
+      byRelease++;
+    }
     if (!debugId) {
       result.skipped.push(source.name);
       continue;
@@ -151,7 +159,10 @@ export async function uploadSourcemaps(dir: string, connection: Connection | nul
     work.push({ source, debugId, code, map: readFileSync(source.map) });
   }
   if (result.skipped.length) {
-    logger.warn(`${result.skipped.length} file(s) have a source map but no debug ID — run \`zharp sourcemaps inject\` first: ${result.skipped.slice(0, 3).join(', ')}${result.skipped.length > 3 ? ', …' : ''}`);
+    logger.warn(`${result.skipped.length} file(s) have a source map but no debug ID — run \`zharp sourcemaps inject\` first, or pass --release with the release the app reports: ${result.skipped.slice(0, 3).join(', ')}${result.skipped.length > 3 ? ', …' : ''}`);
+  }
+  if (byRelease) {
+    logger.info(`${byRelease} file(s) have no debug ID: errors from release ${options.release} are matched to them by file name.`);
   }
   if (work.length === 0) {
     logger.warn(`Nothing to upload in ${dir}.`);
@@ -183,6 +194,13 @@ export async function uploadSourcemaps(dir: string, connection: Connection | nul
   }
   logger.info(`${options.dryRun ? 'Dry run: would have uploaded' : 'Uploaded'} ${result.artifacts} artifact(s), ${formatBytes(result.bytes)}.`);
   return result;
+}
+
+/** A debug ID made from a file's content: the same file always gets the same one. */
+export function contentDebugId(code: Uint8Array): string {
+  const hex = createHash('sha256').update(code).digest('hex');
+  // A UUID (version 4 bits set) so the server files it like any other debug ID.
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 /** Delete these files' source maps (and, if asked, the comments pointing at them). */
