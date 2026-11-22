@@ -72,6 +72,29 @@ export async function post(endpoint: Endpoint, signal: Signal, body: string, kee
   }
 }
 
+/** Bytes of our keepalive requests still in flight: the browser refuses new ones past its budget. */
+let keepaliveInFlight = 0;
+
+/**
+ * Send one body as the page is hidden or closed, exactly once.
+ *
+ * Within the keepalive budget the request outlives the page — and is never sent again: when the
+ * page goes, the browser still delivers it but tells the page it failed (`net::ERR_ABORTED`), so
+ * resending on failure stored everything twice. Past the budget, an ordinary request may still
+ * finish before the page is gone.
+ */
+export function sendOnHide(endpoint: Endpoint, signal: Signal, body: string): void {
+  const size = byteLength(body);
+  if (keepaliveInFlight + size <= MAX_KEEPALIVE_BYTES) {
+    keepaliveInFlight += size;
+    void post(endpoint, signal, body, true).finally(() => {
+      keepaliveInFlight -= size;
+    });
+  } else {
+    void post(endpoint, signal, body);
+  }
+}
+
 /** 429, 5xx and network failures are worth another try; anything else will fail the same way again. */
 export const retryable = (status: number) => status === 0 || status === 429 || status >= 500;
 
@@ -132,13 +155,7 @@ export class Exporter<T> {
     if (!this.queue.length) return;
     const records = this.queue;
     this.queue = [];
-    for (const { body } of split(records, MAX_KEEPALIVE_BYTES, this.wrap)) {
-      // Too large for keepalive's budget: an ordinary request may still finish before the page dies.
-      const keepalive = byteLength(body) <= MAX_KEEPALIVE_BYTES;
-      post(this.endpoint, this.signal, body, keepalive).then((status) => {
-        if (keepalive && status === 0) post(this.endpoint, this.signal, body);
-      });
-    }
+    for (const { body } of split(records, MAX_KEEPALIVE_BYTES, this.wrap)) sendOnHide(this.endpoint, this.signal, body);
   }
 
   private schedule(ms: number): void {
