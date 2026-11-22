@@ -148,7 +148,7 @@ try {
     received.length = 0;
     const response = await get('/checkout/7', { headers: { traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' } });
     assert.equal(response.status, 500);
-    await until(() => errors().length && spans().some((s) => s.kind === 2), 'the error');
+    await until(() => errors().length && spans().some((s) => s.name === 'GET /checkout/:id'), 'the error');
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(errors().length, 1);
     const error = attrs(errors()[0]);
@@ -157,7 +157,7 @@ try {
     assert.equal(error['enduser.id'], 'u-1');
     stack = error['exception.stacktrace'];
     assert.match(stack, /at cartTotal/);
-    const server = spans().find((s) => s.kind === 2);
+    const server = spans().find((s) => s.name === 'GET /checkout/:id');
     assert.equal(server.name, 'GET /checkout/:id');
     assert.equal(server.traceId, '4bf92f3577b34da6a3ce929d0e0e4736');
     assert.equal(errors()[0].spanId, server.spanId);
@@ -212,7 +212,8 @@ try {
   dev = null;
 
   // ── the production build ──────────────────────────────────────────────
-  const out = join(persist, 'dist');
+  // Inside the project (as the deploy script does), so the map's sources are relative to it.
+  const out = join(here, '.wrangler', 'zharp-dist');
   await test('the production build has a source map, and the CLI files it under the release', async () => {
     const result = spawnSync(process.execPath, [wrangler, 'deploy', '--dry-run', '--outdir', out], { cwd: here, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -239,7 +240,7 @@ try {
       copyFileSync(join(out, 'index.js.map'), join(saveFixture, 'worker-index.js.map'));
       // As Cloudflare reports it: the module's name, no local path.
       writeFileSync(join(saveFixture, 'worker.stack.txt'), built.replace(/file:\/\/\/[^\s)]*\/(index\.js)/g, '$1').replace(/\r\n/g, '\n'));
-      writeFileSync(join(saveFixture, 'worker-otlp-logs.json'), JSON.stringify(received.find((r) => r.signal === 'logs').body, null, 2));
+      writeFileSync(join(saveFixture, 'worker-otlp-logs.json'), JSON.stringify(received.find((r) => r.signal === 'logs').body, null, 2).replace(/file:\/\/\/[^\s)"]*\/(index\.js)/g, '$1'));
       console.log(`    (fixture written to ${saveFixture})`);
     }
   });
