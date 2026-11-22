@@ -69,7 +69,25 @@ Listening for `uncaughtException` / `unhandledRejection` stops Node from exiting
 
 ### Exit
 
-What is waiting is sent when the event loop empties, and on SIGTERM/SIGINT (after which the signal is raised again if nothing else is listening for it). In serverless functions, `await Zharp.flush()` before returning.
+What is waiting is sent when the event loop empties, and on SIGTERM/SIGINT (after which the signal is raised again if nothing else is listening for it). In serverless functions, wrap the handler (below) — or `await Zharp.flush()` before returning.
+
+### Serverless functions
+
+A function's process is frozen as soon as the handler returns, so wrap the handler. Each invocation becomes one SERVER span with the FaaS attributes (`faas.trigger`, `faas.invocation_id`, `faas.coldstart`, `faas.name`, `cloud.provider`), continuing the caller's trace when the trigger carries a `traceparent` (API Gateway, HTTP triggers, a CloudEvent's tracing extension). An error the handler throws is reported once and thrown on unchanged. Everything is flushed before the result goes back — for at most `flushTimeout` (2 s by default; on Lambda never past the invocation's remaining time). The wrapped handler has the same arguments and result as yours. Call `Zharp.init()` at the top of the handler's module, with `logs: true` if the function's console output should be sent too (nothing else collects it there).
+
+```typescript
+// AWS Lambda (async, callback or streamifyResponse handlers)
+export const handler = Zharp.lambda(async (event, context) => ({ statusCode: 200, body: 'ok' }));
+
+// Azure Functions, v4 programming model (any trigger)
+app.http('orders', { handler: Zharp.azureFunction(async (request, context) => ({ status: 200 })) });
+
+// Google Cloud Functions: HTTP, CloudEvent or background functions
+functions.http('orders', Zharp.cloudFunction((req, res) => res.send('ok')));
+functions.cloudEvent('onMessage', Zharp.cloudFunction(async (cloudEvent) => { /* … */ }));
+```
+
+On Cloud Functions the response is held until the flush is done (the CPU may be stopped once it is out), and the wrapper makes the request's span itself, so the http instrumentation leaves incoming requests alone from the moment a function is wrapped. On Lambda, OpenTelemetry's own `aws-lambda` instrumentation is off (it would make a second span); `Zharp.lambda` replaces it. Running on Lambda, Azure Functions or Cloud Functions also puts `cloud.provider`, `cloud.platform`, `cloud.region` and `faas.*` on the resource, and the function's name is the default `service.name`.
 
 ### Logs only
 
@@ -90,6 +108,9 @@ Logs (`Zharp.log.*`, and with `logs: true` the console, pino, winston, bunyan), 
 | `Zharp.captureError(err, attrs?)` | |
 | `Zharp.log.<level>(message, attrs?)` | `trace`, `debug`, `info`, `warn`, `error`, `fatal`. An `Error` among the attributes of an error log is sent as its exception. |
 | `Zharp.startSpan(name, fn, options?)` | Run `fn` in a span, ending when it returns or its promise settles. |
+| `Zharp.lambda(handler, { flushTimeout? })` | An AWS Lambda handler, traced and flushed per invocation. See [Serverless functions](#serverless-functions). |
+| `Zharp.azureFunction(handler, { flushTimeout? })` | The same for an Azure Functions handler. |
+| `Zharp.cloudFunction(handler, { flushTimeout? })` | The same for a Google Cloud Function (HTTP, CloudEvent or background). |
 | `Zharp.flush(timeoutMs?)` | Send everything waiting. |
 | `Zharp.shutdown()` | Flush and stop. |
 
