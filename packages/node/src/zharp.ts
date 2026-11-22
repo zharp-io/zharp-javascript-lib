@@ -7,7 +7,7 @@
  * key, under which service), the two processors that put user and session on everything, a
  * console bridge, error capture, and a small API in the same shape as every other Zharp SDK.
  */
-import { createRequire, register as registerLoader } from 'node:module';
+import { createRequire, isBuiltin, register as registerLoader } from 'node:module';
 import { join } from 'node:path';
 import {
   type Context,
@@ -197,6 +197,7 @@ export class ZharpNode {
     const httpConfig = headerCapture ? withHeaderCapture(headerCapture, withBodies) : withBodies;
     const rate = typeof options.sampleRate === 'number' ? Math.min(1, Math.max(0, options.sampleRate)) : 1;
 
+    let instrumentations: any[] = [];
     this.sdk = new NodeSDK({
       resource,
       // Host and OTEL_RESOURCE_ATTRIBUTES only. The process detector would send the command line,
@@ -208,7 +209,7 @@ export class ZharpNode {
       logRecordProcessors: this.logProcessors,
       // Without this the SDK would start an OTLP metrics exporter pointed at localhost:4318.
       metricReaders: [],
-      instrumentations: [
+      instrumentations: (instrumentations = [
         ...(tracing
           ? getNodeAutoInstrumentations({
               // A span per DNS lookup, socket and file read buries the requests that matter.
@@ -225,10 +226,12 @@ export class ZharpNode {
           ? [new FrameworkErrorsInstrumentation((error, mechanism) => this.report(error, false, 'error', { 'zharp.mechanism': mechanism }, true))]
           : []),
         ...(options.extraInstrumentations ?? []),
-      ],
+      ]),
     });
     this.sdk.start();
     if (tracing) preloadCommonJsFrameworks();
+    // Bun runs no require hooks, so nothing would be patched as it loads: patch it now instead.
+    if (isBun()) patchWithoutHooks(instrumentations);
     this.logger = logs.getLogger('@zharp/node', VERSION);
 
     if (correlation) this.teardowns.push(stampOutput());
@@ -570,6 +573,59 @@ function preloadCommonJsFrameworks(): void {
       appRequire(name);
     } catch {
       // Not installed: nothing to trace.
+    }
+  }
+}
+
+const isBun = () => typeof (globalThis as any).Bun !== 'undefined';
+
+/**
+ * Bun has no require hooks for OpenTelemetry to patch modules as they load. Load each module an
+ * instrumentation covers (node:http, express, koa…) — the ones the app has — and patch it in
+ * place. The app's own require or import then gets the same, patched module object.
+ */
+function patchWithoutHooks(instrumentations: any[]): void {
+  let appRequire: NodeRequire;
+  try {
+    appRequire = createRequire(join(process.cwd(), 'noop.js'));
+  } catch {
+    return;
+  }
+  for (const instrumentation of instrumentations) {
+    let definitions: any[] = [];
+    // Bun's require hook fired on its own copy of node:http, so the HTTP instrumentation thinks
+    // it's done ("_httpPatched") and would skip the module the app actually uses.
+    for (const flag of ['_httpPatched', '_httpsPatched']) if (instrumentation && flag in instrumentation) instrumentation[flag] = false;
+    try {
+      definitions = instrumentation?.getModuleDefinitions?.() ?? [];
+    } catch {
+      continue;
+    }
+    for (const definition of definitions) {
+      let exported: unknown;
+      try {
+        exported = appRequire(definition.name);
+      } catch {
+        continue; // not installed
+      }
+      let version: string | undefined;
+      try {
+        version = definition.name.includes(':') || !definition.name.includes('/') && isBuiltin(definition.name) ? process.versions.node : appRequire(`${definition.name}/package.json`).version;
+      } catch {
+        version = undefined;
+      }
+      try {
+        definition.patch?.(exported, version);
+      } catch {
+        // An instrumentation that can't patch this version leaves it alone.
+      }
+      for (const file of definition.files ?? []) {
+        try {
+          file.patch?.(appRequire(file.name), version);
+        } catch {
+          // A file this version doesn't have.
+        }
+      }
     }
   }
 }
