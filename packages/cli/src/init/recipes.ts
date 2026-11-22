@@ -359,4 +359,7 @@ export const GUIDES: Record<string, string> = {
   flask: 'https://zharp.io/docs/sdks/python',
   laravel: 'https://zharp.io/docs/sdks/php',
   go: 'https://zharp.io/docs/sdks/go',
+  rails: 'https://zharp.io/docs/sdks/ruby',
+  rack: 'https://zharp.io/docs/sdks/ruby',
+  ruby: 'https://zharp.io/docs/sdks/ruby',
 };

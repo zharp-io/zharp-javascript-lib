@@ -352,6 +352,90 @@ function go(project: Project, c: Connected, api: string): Plan {
   return plan;
 }
 
+// ── Ruby ─────────────────────────────────────────────────────────────────────────
+
+const bundleAdd = (): Command => ({ label: 'bundle add zharp', argv: ['bundle', 'add', 'zharp'] });
+
+/**
+ * Rails: the gem's Railtie starts Zharp, so the generator only writes config/initializers/zharp.rb
+ * (options commented out). The key goes in .env when the app loads it (dotenv), else the generator
+ * stores it in the credentials (zharp.key).
+ */
+function rails(project: Project, c: Connected, api: string): Plan {
+  const endpoint = otlpOf(api);
+  const plan = emptyPlan(project.dotenv ? '.env' : null);
+  const generate: Command = { label: 'bin/rails generate zharp:install', argv: ['bundle', 'exec', 'rails', 'generate', 'zharp:install'] };
+  if (project.dotenv) {
+    plan.env.vars = { ZHARP_KEY: c.application.ingestKey, ZHARP_SERVICE: c.application.serviceName, ...(endpoint ? { ZHARP_ENDPOINT: endpoint } : {}) };
+    plan.notes.push('Rails starts Zharp by itself. Set ZHARP_KEY where the app runs in production too.');
+  } else {
+    generate.label = 'bin/rails generate zharp:install (the key into the credentials)';
+    generate.argv.push(`--key=${c.application.ingestKey}`);
+    if (endpoint) plan.notes.push(`Set ZHARP_ENDPOINT=${endpoint} where the app runs.`);
+    plan.notes.push(`Rails starts Zharp by itself; the key is in the credentials (zharp.key). If they couldn't be written: bin/rails credentials:edit, add "zharp:" with "key: ${c.application.ingestKey}" under it, or set ZHARP_KEY.`);
+  }
+  plan.commands = [bundleAdd(), generate];
+  return plan;
+}
+
+/** config.ru with Zharp required after its other requires and `use Zharp::Rack` before `run`. */
+export function editConfigRu(text: string, c: Connected, api: string, keyInCode: boolean): string | null {
+  if (/Zharp::Rack|require ["']zharp["']/.test(text)) return null;
+  if (!/^[ \t]*run[\s(]/m.test(text)) return null;
+  const endpoint = otlpOf(api);
+  const block = ['require "zharp"'];
+  if (keyInCode) {
+    block.push(
+      "# The app's key can only send data to this app, so it is safe in code.",
+      `Zharp.init(key: "${c.application.ingestKey}", service: "${c.application.serviceName}"${endpoint ? `, endpoint: "${endpoint}"` : ''})`,
+    );
+  }
+  const runAt = /^[ \t]*run[\s(]/m.exec(text)!.index;
+  const last = [...text.matchAll(/^require(?:_relative)?\s.*$/gm)].filter((m) => m.index! < runAt).at(-1);
+  let next = last
+    ? `${text.slice(0, last.index! + last[0].length)}\n${block.join('\n')}${text.slice(last.index! + last[0].length)}`
+    : `${block.join('\n')}\n\n${text}`;
+  const run = /^([ \t]*)run[\s(]/m.exec(next)!;
+  next = `${next.slice(0, run.index)}${run[1]}use Zharp::Rack\n${next.slice(run.index)}`;
+  return next;
+}
+
+/** Sinatra, Hanami, Roda, Grape, plain Rack: one use line in config.ru. */
+function rack(project: Project, c: Connected, api: string): Plan {
+  const configRu = read(project.dir, 'config.ru');
+  // .env only when config.ru loads it; otherwise the key goes in config.ru, as Python's and Go's do.
+  const envLoaded = !!project.dotenv && /dotenv/.test(configRu ?? '');
+  const endpoint = otlpOf(api);
+  const plan = emptyPlan(envLoaded ? '.env' : null);
+  plan.commands = [bundleAdd()];
+  if (envLoaded) plan.env.vars = { ZHARP_KEY: c.application.ingestKey, ZHARP_SERVICE: c.application.serviceName, ...(endpoint ? { ZHARP_ENDPOINT: endpoint } : {}) };
+  const edited = configRu !== null ? editConfigRu(configRu, c, api, !envLoaded) : null;
+  if (edited) {
+    plan.changes.push({ path: 'config.ru', kind: 'edit', content: edited, note: 'traces each request (use Zharp::Rack)' });
+  } else if (!configRu || !/Zharp::Rack/.test(configRu)) {
+    plan.manual.push({
+      path: 'config.ru',
+      why: 'trace each request',
+      snippet: `require "zharp"\nZharp.init(key: "${c.application.ingestKey}", service: "${c.application.serviceName}")\nuse Zharp::Rack`,
+    });
+  }
+  return plan;
+}
+
+/** Plain Ruby: scripts and workers start Zharp themselves, after their gems are required. */
+function plainRuby(c: Connected, api: string): Plan {
+  const plan = emptyPlan(null);
+  const endpoint = otlpOf(api);
+  plan.commands = [bundleAdd()];
+  plan.manual.push({
+    path: 'your entry file',
+    why: 'start Zharp after your gems are required',
+    snippet: `require "zharp"\nZharp.init(key: "${c.application.ingestKey}", service: "${c.application.serviceName}"${endpoint ? `, endpoint: "${endpoint}"` : ''})`,
+  });
+  plan.notes.push('A Sidekiq process outside Rails: bundle exec sidekiq -r ./your_app.rb -r zharp/sidekiq (with ZHARP_KEY set).');
+  return plan;
+}
+
 export function morePlanFor(project: Project, c: Connected, api: string): Plan | null {
   switch (project.framework) {
     case 'express':
@@ -368,6 +452,16 @@ export function morePlanFor(project: Project, c: Connected, api: string): Plan |
       return laravel(project, c, api);
     case 'go':
       return go(project, c, api);
+    case 'rails':
+      return rails(project, c, api);
+    case 'sinatra':
+    case 'hanami':
+    case 'roda':
+    case 'grape':
+    case 'rack':
+      return rack(project, c, api);
+    case 'ruby':
+      return plainRuby(c, api);
     default:
       return PYTHON_FRAMEWORKS.some((f) => f.id === project.framework) ? python(project, c, api) : null;
   }
