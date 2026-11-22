@@ -1,6 +1,6 @@
 {
   "name": "create-zharp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "npm init zharp — connect your project to Zharp and set up error tracking, tracing and logs in one step",
   "bin": {
     "create-zharp": "cli.js"
