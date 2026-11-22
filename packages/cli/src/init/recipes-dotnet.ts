@@ -100,10 +100,10 @@ function centralPackages(dir: string, projectDir: string): boolean {
 }
 
 /** The project file with a package reference (and sources embedded): null when nothing changes. */
-export function editCsproj(text: string, pkg: string | null, embed: boolean): string | null {
+export function editCsproj(text: string, pkg: string | null, embed: boolean, devOnly = false): string | null {
   let out = text;
   if (pkg && !new RegExp(`Include="${pkg.replace(/\./g, '\\.')}"`).test(out)) {
-    const ref = `    <PackageReference Include="${pkg}" Version="${DOTNET_VERSION}" />`;
+    const ref = `    <PackageReference Include="${pkg}" Version="${DOTNET_VERSION}"${devOnly ? ' PrivateAssets="all"' : ''} />`;
     if (/<ItemGroup>[\s\S]*?<PackageReference /.test(out)) {
       out = out.replace(/(<ItemGroup>\s*\n)(\s*<PackageReference )/, `$1${ref}\n$2`);
     } else {
@@ -197,6 +197,31 @@ export function editGcfFunction(text: string): string | null {
   return lines.join('\n');
 }
 
+/** Whether the project builds without a PDB: DebugType none, or no debug symbols, here or in a Directory.Build.props above. */
+export function buildsWithoutPdb(dir: string, projectDir: string, csproj: string): boolean {
+  const none = (text: string) => /<DebugType>\s*none\s*<\/DebugType>/i.test(text) || /<DebugSymbols>\s*false\s*<\/DebugSymbols>/i.test(text);
+  if (none(csproj)) return true;
+  if (/<DebugType>/i.test(csproj)) return false;
+  let at = join(dir, projectDir);
+  for (let i = 0; i < 8; i++) {
+    const text = (() => { try { return readFileSync(join(at, 'Directory.Build.props'), 'utf8'); } catch { return null; } })();
+    if (text !== null) return none(text);
+    if (existsSync(join(at, '.git')) || dirname(at) === at) break;
+    at = dirname(at);
+  }
+  return false;
+}
+
+/** WebApiConfig.Register with config.AddZharp() first. */
+export function editWebApiConfig(text: string): string | null {
+  if (/\.AddZharp\(/.test(text)) return null;
+  const m = /public\s+static\s+void\s+Register\s*\(\s*HttpConfiguration\s+(\w+)\s*\)\s*\n?\s*\{[^\n]*\n/.exec(text);
+  if (!m) return null;
+  const at = m.index + m[0].length;
+  const indent = /^([ \t]*)\S/m.exec(text.slice(at))?.[1] ?? '            ';
+  return `${text.slice(0, at)}${indent}${m[1]}.AddZharp();\n${text.slice(at)}`;
+}
+
 const DEFAULT_API = 'https://api.zharp.io';
 const otlpOf = (api: string) => {
   const clean = api.replace(/\/+$/, '');
@@ -211,16 +236,29 @@ export function dotnet(project: Project, c: Connected, api: string): Plan | null
   const endpoint = otlpOf(api);
   const projectDir = dirname(found.csproj) === '.' ? '' : dirname(found.csproj);
   const at = (file: string) => (projectDir ? `${projectDir}/${file}` : file);
-  const pkg = PACKAGE[found.host]!;
   const csprojText = read(project.dir, found.csproj) ?? '';
 
-  // The package, and the sources in the PDB.
+  // Web API 2 on .NET Framework: its package (which brings Zharp.AspNet) and config.AddZharp().
+  const packagesConfig = found.host === 'aspnet' ? read(project.dir, at('packages.config')) : null;
+  const webApi = found.host === 'aspnet' && /Microsoft\.AspNet\.WebApi/.test(`${csprojText}\n${packagesConfig ?? ''}`);
+  const pkg = webApi ? 'Zharp.AspNet.WebApi' : PACKAGE[found.host]!;
+
+  // The package, and the sources in the PDB — or, for a build without a PDB, where
+  // <EmbedAllSources> doesn't compile (CS2045), Zharp.Build's source bundle instead.
+  const pdbless = buildsWithoutPdb(project.dir, projectDir, csprojText);
   const central = centralPackages(project.dir, projectDir);
-  if (central) plan.commands!.push({ label: `dotnet add ${found.csproj} package ${pkg}`, argv: ['dotnet', 'add', found.csproj, 'package', pkg, '--version', DOTNET_VERSION] });
-  const classicPackages = found.host === 'aspnet' && existsSync(join(project.dir, projectDir, 'packages.config'));
-  const edited = editCsproj(csprojText, central || classicPackages ? null : pkg, true);
-  if (edited) plan.changes.push({ path: found.csproj, kind: 'edit', content: edited, note: [central || classicPackages ? null : `adds ${pkg}`, /<EmbedAllSources>/.test(csprojText) ? null : 'embeds the sources in the PDB'].filter(Boolean).join('; ') });
-  if (classicPackages) plan.manual.push({ path: found.csproj, why: 'a packages.config project: add the package from Visual Studio\'s Package Manager Console', snippet: `Install-Package ${pkg} -Version ${DOTNET_VERSION}` });
+  const classicPackages = packagesConfig !== null;
+  const add = [pkg, ...(pdbless ? ['Zharp.Build'] : [])];
+  if (central) for (const p of add) plan.commands!.push({ label: `dotnet add ${found.csproj} package ${p}`, argv: ['dotnet', 'add', found.csproj, 'package', p, '--version', DOTNET_VERSION] });
+  let edited = editCsproj(csprojText, central || classicPackages ? null : pkg, !pdbless);
+  if (pdbless && !central && !classicPackages) edited = editCsproj(edited ?? csprojText, 'Zharp.Build', false, true) ?? edited;
+  const notes = [central || classicPackages ? null : `adds ${add.join(' and ')}`, pdbless || /<EmbedAllSources>/.test(csprojText) ? null : 'embeds the sources in the PDB'].filter(Boolean);
+  if (edited) plan.changes.push({ path: found.csproj, kind: 'edit', content: edited, note: notes.join('; ') });
+  if (classicPackages) plan.manual.push({ path: found.csproj, why: 'a packages.config project: add the package from Visual Studio\'s Package Manager Console', snippet: add.map((p) => `Install-Package ${p} -Version ${DOTNET_VERSION}`).join('\n') });
+  if (pdbless) {
+    plan.notes.push('This project builds without a PDB (DebugType none), so its sources can\'t be embedded (the compiler refuses <EmbedAllSources> there): Zharp.Build was added to upload them as a source bundle instead.'
+      + ` Set ZHARP_APP_ID=${c.application.id} and ZHARP_AUTH_TOKEN (a workspace API key with artifacts:write) in CI. Stacks get file names and lines only from a PDB: <DebugType>portable</DebugType> (or embedded) makes them readable.`);
+  }
 
   const program = at('Program.cs');
   const programText = read(project.dir, program);
@@ -277,10 +315,17 @@ export function dotnet(project: Project, c: Connected, api: string): Plan | null
       const next = text ? editWebConfig(text, key, endpoint) : null;
       if (next) plan.changes.push({ path, kind: 'edit', content: next, note: 'the app\'s key in <appSettings>; the package installs its own module' });
       else if (!text?.includes('Zharp:Key')) plan.manual.push({ path, why: 'add the app\'s key', snippet: `<add key="Zharp:Key" value="${key}" />` });
+      if (webApi) {
+        const configPath = at('App_Start/WebApiConfig.cs');
+        const configText = read(project.dir, configPath);
+        const nextConfig = configText ? editWebApiConfig(configText) : null;
+        if (nextConfig) plan.changes.push({ path: configPath, kind: 'edit', content: nextConfig, note: 'config.AddZharp(): Web API controllers\' errors (Web API handles them before Application_Error)' });
+        else if (!configText?.includes('AddZharp(')) plan.manual.push({ path: configText ? configPath : 'WebApiConfig.Register', why: 'report Web API controllers\' errors', snippet: 'config.AddZharp();' });
+      }
       plan.notes.push('.NET Framework 4.6.2–4.7.1 reads only Windows PDBs: set <DebugType>full</DebugType> there (4.7.2+ reads the portable PDBs that carry the sources).');
       break;
     }
   }
-  plan.notes.push('Builds that can\'t embed their sources: add Zharp.Build (PrivateAssets="all") and set ZHARP_APP_ID and ZHARP_AUTH_TOKEN in CI to upload a source bundle instead.');
+  if (!pdbless) plan.notes.push('Builds that can\'t embed their sources: add Zharp.Build (PrivateAssets="all") and set ZHARP_APP_ID and ZHARP_AUTH_TOKEN in CI to upload a source bundle instead.');
   return plan;
 }

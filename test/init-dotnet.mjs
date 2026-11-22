@@ -175,6 +175,41 @@ await test('classic ASP.NET (packages.config): the key in Web.config, Install-Pa
   assert.doesNotMatch(csproj, /PackageReference/);
 });
 
+await test('Web API 2 (classic): Zharp.AspNet.WebApi and config.AddZharp() in WebApiConfig.Register', () => {
+  const p = project('webapi', {
+    'Api/Api.csproj': ['<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">', '  <PropertyGroup>', '    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>', '  </PropertyGroup>', '  <ItemGroup>', '    <Reference Include="System.Web" />', '  </ItemGroup>', '</Project>', ''].join(NL),
+    'Api/packages.config': ['<packages>', '  <package id="Microsoft.AspNet.WebApi.Core" version="5.3.0" targetFramework="net48" />', '</packages>', ''].join(NL),
+    'Api/Web.config': ['<configuration>', '</configuration>', ''].join(NL),
+    'Api/App_Start/WebApiConfig.cs': ['public static class WebApiConfig', '{', '    public static void Register(HttpConfiguration config)', '    {', '        config.MapHttpAttributeRoutes();', '    }', '}', ''].join(NL),
+  });
+  assert.equal(p.catalog, 'ASP.NET');
+  const plan = planFor(p, c, API);
+  assert.equal(plan.manual[0].snippet, 'Install-Package Zharp.AspNet.WebApi -Version 0.1.0');
+  assert.ok(change(plan, 'Api/App_Start/WebApiConfig.cs').content.includes(['    {', '        config.AddZharp();', '        config.MapHttpAttributeRoutes();'].join(NL)));
+  assert.ok(change(plan, 'Api/Web.config').content.includes('<add key="Zharp:Key" value="zpk_abc" />'));
+});
+
+await test('a build without a PDB (DebugType none): no EmbedAllSources (CS2045), Zharp.Build instead, said in the plan', () => {
+  const p = project('nopdb', {
+    'Api.csproj': WEB_CSPROJ.replace('</TargetFramework>', '</TargetFramework>' + NL + '    <DebugType>none</DebugType>'),
+    'Program.cs': MINIMAL,
+  });
+  const plan = planFor(p, c, API);
+  const csproj = change(plan, 'Api.csproj');
+  assert.ok(!csproj.content.includes('EmbedAllSources'));
+  assert.ok(csproj.content.includes('<PackageReference Include="Zharp.AspNetCore" Version="0.1.0" />'));
+  assert.ok(csproj.content.includes('<PackageReference Include="Zharp.Build" Version="0.1.0" PrivateAssets="all" />'));
+  assert.equal(csproj.note, 'adds Zharp.AspNetCore and Zharp.Build');
+  assert.ok(plan.notes.some((n) => n.includes('without a PDB') && n.includes('ZHARP_APP_ID=42')));
+});
+
+await test('DebugType none from a Directory.Build.props counts too; embedded PDBs keep EmbedAllSources', () => {
+  const p = project('nopdb-props', { 'Directory.Build.props': '<Project><PropertyGroup><DebugType>none</DebugType></PropertyGroup></Project>', 'src/Api/Api.csproj': WEB_CSPROJ, 'src/Api/Program.cs': MINIMAL });
+  assert.ok(!change(planFor(p, c, API), 'src/Api/Api.csproj').content.includes('EmbedAllSources'));
+  const q = project('embedded', { 'Api.csproj': WEB_CSPROJ.replace('</TargetFramework>', '</TargetFramework>' + NL + '    <DebugType>embedded</DebugType>'), 'Program.cs': MINIMAL });
+  assert.ok(change(planFor(q, c, API), 'Api.csproj').content.includes('<EmbedAllSources>true</EmbedAllSources>'));
+});
+
 await test('apps (MAUI, WPF, Windows Forms) come later: no recipe, a guide', () => {
   const p = project('wpf', { 'Desk.csproj': '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <UseWPF>true</UseWPF>\n  </PropertyGroup>\n</Project>\n' });
   assert.equal(p.framework, 'dotnet');
