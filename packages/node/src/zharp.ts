@@ -630,17 +630,42 @@ function patchWithoutHooks(instrumentations: any[]): void {
   }
 }
 
-/** Register OpenTelemetry's ES module loader hook, once per process. */
+/**
+ * Register OpenTelemetry's ES module loader hook, once per process.
+ *
+ * Only the modules an instrumentation hooks (node:http, pg, express…) go through it — they are
+ * added as each instrumentation is enabled, which init() does before the app's first import.
+ * Wrapping every module instead breaks the app: the wrapper takes a copy of a module's exports,
+ * so an exported binding the module later reassigns stays stale for its importers. Bundled
+ * servers (SvelteKit, Nuxt, Astro, Remix…) do exactly that, and every request failed.
+ */
 function registerEsmHook(): void {
   const g = globalThis as any;
   if (g.__ZHARP_ESM_HOOK__) return;
   g.__ZHARP_ESM_HOOK__ = true;
   try {
     // Resolved from this package, which depends on @opentelemetry/instrumentation directly.
-    registerLoader?.('@opentelemetry/instrumentation/hook.mjs', import.meta.url, { data: { exclude: ESM_HOOK_EXCLUDE } });
+    registerLoader?.('@opentelemetry/instrumentation/hook.mjs', import.meta.url, esmHookOptions() as any);
   } catch {
     // Older Node without module.register: CommonJS is still instrumented.
   }
+}
+
+/** The loader's options: include only what an instrumentation hooks, if this version can. */
+function esmHookOptions(): { data: Record<string, unknown>; transferList?: unknown[] } {
+  try {
+    // The copy of import-in-the-middle the instrumentations use: their hooks reach the loader
+    // through the channel it creates.
+    const otel = createRequire(createRequire(import.meta.url).resolve('@opentelemetry/instrumentation'));
+    const { createAddHookMessageChannel } = otel('import-in-the-middle');
+    if (typeof createAddHookMessageChannel === 'function') {
+      const { registerOptions } = createAddHookMessageChannel();
+      return { data: { ...registerOptions.data, exclude: ESM_HOOK_EXCLUDE }, transferList: registerOptions.transferList };
+    }
+  } catch {
+    // Fall back to wrapping everything but the exclusions.
+  }
+  return { data: { exclude: ESM_HOOK_EXCLUDE } };
 }
 
 /**
