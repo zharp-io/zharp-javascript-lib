@@ -5,12 +5,13 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { detectDotnet } from './recipes-dotnet';
 
 export type Framework =
   | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | RubyFramework | 'unknown';
+  | 'laravel' | 'go' | 'dotnet' | RubyFramework | 'unknown';
 
 /** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
 export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
@@ -57,7 +58,7 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'react-native' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'react-native' | 'dotnet' | 'otel';
   /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
   dotenv?: boolean;
   packageManager: 'pnpm' | 'yarn' | 'bun' | 'npm';
@@ -134,6 +135,9 @@ export function detect(dir: string): Project {
     return { ...base, name: moduleName || basename(dir), framework: 'go', label, catalog: router?.catalog ?? 'Go', goRouter: router?.id, platform: 'go' };
   }
   if (gemfile !== null && !deps['react-native'] && !deps.expo) return { ...base, ...ruby(dir, gemfile) };
+  // .NET: a project file (alone or in a solution), and the host it targets.
+  const net = detectDotnet(dir);
+  if (net) return { ...base, name: basename(net.csproj).replace(/\.csproj$/, ''), framework: 'dotnet', label: net.label, catalog: net.catalog, platform: 'dotnet' };
   if (pkg) return { ...base, framework: 'node', label: 'Node.js', catalog: 'Node.js', platform: 'node' };
   return { ...base, framework: 'unknown', label: 'an unknown project', platform: 'otel' };
 }
