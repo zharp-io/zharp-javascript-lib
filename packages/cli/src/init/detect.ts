@@ -5,12 +5,13 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { detectDotnet } from './recipes-dotnet';
 
 export type Framework =
   | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'unknown';
+  | 'laravel' | 'go' | 'dotnet' | 'unknown';
 
 /** Python frameworks set up like FastAPI and Flask: Zharp started in the module that creates the app. */
 export type PythonFramework = 'chalice' | 'sanic' | 'quart' | 'starlette' | 'falcon' | 'tornado' | 'pyramid' | 'aiohttp' | 'bottle' | 'celery' | 'rq';
@@ -54,7 +55,7 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'react-native' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'react-native' | 'dotnet' | 'otel';
   packageManager: 'pnpm' | 'yarn' | 'bun' | 'npm';
   typescript: boolean;
   /** Next.js: the app directory ("app" or "src/app"), when it uses the app router. */
@@ -123,6 +124,9 @@ export function detect(dir: string): Project {
     const label = router ? `Go (${router.id === 'gorilla' ? 'gorilla/mux' : router.catalog})` : 'Go';
     return { ...base, name: moduleName || basename(dir), framework: 'go', label, catalog: router?.catalog ?? 'Go', goRouter: router?.id, platform: 'go' };
   }
+  // .NET: a project file (alone or in a solution), and the host it targets.
+  const net = detectDotnet(dir);
+  if (net) return { ...base, name: basename(net.csproj).replace(/\.csproj$/, ''), framework: 'dotnet', label: net.label, catalog: net.catalog, platform: 'dotnet' };
   if (pkg) return { ...base, framework: 'node', label: 'Node.js', catalog: 'Node.js', platform: 'node' };
   return { ...base, framework: 'unknown', label: 'an unknown project', platform: 'otel' };
 }

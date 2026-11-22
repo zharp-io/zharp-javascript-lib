@@ -359,4 +359,5 @@ export const GUIDES: Record<string, string> = {
   flask: 'https://zharp.io/docs/sdks/python',
   laravel: 'https://zharp.io/docs/sdks/php',
   go: 'https://zharp.io/docs/sdks/go',
+  dotnet: 'https://zharp.io/docs/sdks/dotnet',
 };

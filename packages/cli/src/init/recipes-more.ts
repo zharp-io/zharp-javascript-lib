@@ -12,6 +12,7 @@ import { join, relative } from 'node:path';
 import { GO_ROUTERS, PYTHON_FRAMEWORKS, type GoRouter, type Project } from './detect';
 import type { Connected } from './connect';
 import type { Plan } from './recipes';
+import { dotnet } from './recipes-dotnet';
 
 export interface Command {
   /** What it does, for the plan: "install zharp into .venv". */
@@ -368,6 +369,8 @@ export function morePlanFor(project: Project, c: Connected, api: string): Plan |
       return laravel(project, c, api);
     case 'go':
       return go(project, c, api);
+    case 'dotnet':
+      return dotnet(project, c, api);
     default:
       return PYTHON_FRAMEWORKS.some((f) => f.id === project.framework) ? python(project, c, api) : null;
   }
