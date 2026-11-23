@@ -97,6 +97,45 @@ try {
     assert.equal(JSON.parse(bundle.data.toString()).files[cart], 'int Cart::total() const {\n  return 0;\n}\n');
   });
 
+  await test('a module with an all-zero debug ID (a PE with no PDB reference) is skipped, with a line saying so', async () => {
+    const dir = mkdtempSync(join(tmp, 'nopdb-'));
+    writeFileSync(join(dir, 'tbb12.sym'), sym('000000000000000000000000000000000', 'tbb12.dll'));
+    writeFileSync(join(dir, 'game.sym'), sym('CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC1', 'game.pdb'));
+    const lines = [];
+    const logger = { info: (line) => lines.push(line), warn: (line) => lines.push(line) };
+    const result = await cli.uploadDebugFiles([dir], null, { logger, dryRun: true });
+    assert.deepEqual(result.modules.map((m) => m.module.name), ['game.pdb']);
+    assert.ok(lines.includes('  skipped tbb12.sym: no debug info'), lines.join('\n'));
+    assert.ok(cli.isEmptyDebugId('000000000000000000000000000000000') && !cli.isEmptyDebugId('A6A0D689FB0FA7DAF8AAD1DAB7F75D6C0'));
+    rmSync(join(dir, 'game.sym'));
+    await assert.rejects(cli.uploadDebugFiles([dir], null, { logger: quiet, dryRun: true }), /No debug files/, 'nothing left to upload');
+  });
+
+  await test("Windows' extended-length prefix comes off FILE paths (and so off the source bundle's keys)", async () => {
+    assert.equal(cli.stripExtendedPathPrefix('\\\\?\\C:\\src\\a.cpp'), 'C:\\src\\a.cpp');
+    assert.equal(cli.stripExtendedPathPrefix('\\\\?\\UNC\\build\\share\\a.cpp'), '\\\\build\\share\\a.cpp');
+    assert.equal(cli.stripExtendedPathPrefix('C:\\src\\a.cpp'), 'C:\\src\\a.cpp');
+    const local = join(src, 'cart.cpp');
+    const raw = Buffer.from(sym('DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD1', 'game.pdb', { files: [`\\\\?\\${local}`, '\\\\?\\UNC\\build\\share\\b.cpp', 'D:\\plain.cpp'] }).replace('FUNC 2f50 2b 0 Cart::total() const', 'FUNC 2f50 2b 0 weird\\\\?\\name'));
+    const clean = cli.stripSymPathPrefixes(raw).toString();
+    assert.deepEqual(clean.split('\n').filter((l) => l.startsWith('FILE ')), [`FILE 0 ${local}`, 'FILE 1 \\\\build\\share\\b.cpp', 'FILE 2 D:\\plain.cpp']);
+    assert.ok(clean.includes('FUNC 2f50 2b 0 weird\\\\?\\name'), 'only FILE paths change');
+    const unchanged = Buffer.from(sym('EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE1', 'x'));
+    assert.equal(cli.stripSymPathPrefixes(unchanged), unchanged, 'no copy when there is nothing to strip');
+
+    const dir = mkdtempSync(join(tmp, 'prefix-'));
+    writeFileSync(join(dir, 'game.sym'), raw);
+    const sent = [];
+    const fetch = async (url, init) => {
+      const form = init.body;
+      sent.push({ kind: form.get('kind'), data: gunzipSync(Buffer.from(await form.get('file').arrayBuffer())).toString() });
+      return new Response('{"data":[]}', { status: 201 });
+    };
+    await cli.uploadDebugFiles([dir], { url: 'http://zharp.test', authToken: 'zk_test', app: 1 }, { logger: quiet, fetch, includeSources: true });
+    assert.ok(sent.find((s) => s.kind === 'breakpad-sym').data.includes(`\nFILE 0 ${local}\n`), 'the uploaded .sym has plain paths');
+    assert.deepEqual(Object.keys(JSON.parse(sent.find((s) => s.kind === 'source-bundle').data).files), [local]);
+  });
+
   await test('dry run sends nothing and needs no connection', async () => {
     const result = await cli.uploadDebugFiles([build], null, { logger: quiet, dryRun: true, fetch: () => assert.fail('sent') });
     assert.equal(result.artifacts.length, 2);

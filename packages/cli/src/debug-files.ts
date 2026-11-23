@@ -98,7 +98,46 @@ export interface SymFile {
   functions: number;
 }
 
+/**
+ * A Windows path without its extended-length prefix: `\\?\C:\src\a.cpp` is `C:\src\a.cpp`, and
+ * `\\?\UNC\server\share\a.cpp` is `\\server\share\a.cpp`. dump_syms keeps the prefix where the
+ * compiler recorded it; crashes show (and sources are keyed by) the plain path.
+ */
+export function stripExtendedPathPrefix(path: string): string {
+  if (!path.startsWith('\\\\?\\')) return path;
+  return /^\\\\\?\\UNC\\/i.test(path) ? `\\\\${path.slice(8)}` : path.slice(4);
+}
+
+const EXTENDED_PREFIX = Buffer.from('\\\\?\\', 'latin1');
+
+/** The `.sym` with each FILE record's path through stripExtendedPathPrefix; the same buffer when none has the prefix. */
+export function stripSymPathPrefixes(data: Buffer): Buffer {
+  let at = data.indexOf(EXTENDED_PREFIX);
+  if (at < 0) return data;
+  const parts: Buffer[] = [];
+  let from = 0;
+  while (at >= 0) {
+    // Only where a FILE record's path starts: `FILE <n> \\?\…`.
+    const lineStart = at === 0 ? 0 : data.lastIndexOf(0x0a, at - 1) + 1;
+    if (/^FILE \d+ $/.test(data.toString('latin1', lineStart, at))) {
+      parts.push(data.subarray(from, at));
+      const unc = data.toString('latin1', at + 4, at + 8).toUpperCase() === 'UNC\\';
+      if (unc) parts.push(Buffer.from('\\\\', 'latin1'));
+      from = at + (unc ? 8 : 4);
+    }
+    at = data.indexOf(EXTENDED_PREFIX, at + 4);
+  }
+  parts.push(data.subarray(from));
+  return Buffer.concat(parts);
+}
+
+/** A debug ID of only zeros: what dump_syms gives a PE with no CodeView record (no PDB to match it by). */
+export function isEmptyDebugId(debugId: string): boolean {
+  return /^0+$/.test(debugId);
+}
+
 export function readSym(data: Buffer, source: string): SymFile | null {
+  data = stripSymPathPrefixes(data);
   const text = data.toString('utf8', 0, Math.min(data.length, 4096));
   const module = parseModuleLine(text.replace(/^﻿/, '').split(/\r?\n/, 1)[0]);
   if (!module) return null;
@@ -142,6 +181,11 @@ export async function collectSyms(paths: string[], options: CollectSymsOptions =
   const files = paths.flatMap((path) => findDebugFiles(path));
   const byId = new Map<string, SymFile>();
   const keep = (sym: SymFile) => {
+    if (isEmptyDebugId(sym.module.debugId)) {
+      // Nothing a crash could match it by: a DLL built without a PDB reference (tbb12.dll and the like).
+      logger.info(`  skipped ${basename(sym.source)}: no debug info`);
+      return;
+    }
     const key = sym.module.debugId.toUpperCase();
     const current = byId.get(key);
     if (!current || (sym.functions > 0 && current.functions === 0) || (!!sym.functions === !!current.functions && sym.data.length > current.data.length)) byId.set(key, sym);
