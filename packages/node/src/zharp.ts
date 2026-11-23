@@ -57,6 +57,7 @@ import { captureConsole } from './console';
 import { captureOutput, SentLineProcessor, stampOutput } from './stdout';
 import { DebugIdLogProcessor, DebugIdSpanProcessor } from './debug-ids';
 import { asError, exceptionAttributes, SEVERITY, type Level } from './errors';
+import { PathRewriteLogProcessor, PathRewriteSpanProcessor } from './paths';
 import type { Attributes, NodeOptions, ZharpUser } from './types';
 import {
   azureInvocation,
@@ -192,6 +193,7 @@ export class ZharpNode {
           ...(this.dbErrors ? [this.dbErrors] : []),
           new UrlRedactionSpanProcessor(),
           new DebugIdSpanProcessor(),
+          ...(options.rewritePaths ? [new PathRewriteSpanProcessor(options.rewritePaths)] : []),
           new BatchSpanProcessor({ exporter: new OTLPTraceExporter({ ...exporterOptions, url: `${endpoint}/v1/traces` }) }),
         ]
       : [new ContextSpanProcessor(this.store)];
@@ -199,6 +201,7 @@ export class ZharpNode {
       new SentLineProcessor(),
       new ContextLogProcessor(this.store),
       new DebugIdLogProcessor(),
+      ...(options.rewritePaths ? [new PathRewriteLogProcessor(options.rewritePaths)] : []),
       new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ ...exporterOptions, url: `${endpoint}/v1/logs` }) }),
     ];
 
