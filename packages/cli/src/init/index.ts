@@ -239,16 +239,18 @@ export async function runInit(options: InitOptions): Promise<number> {
     }
   }
   const leftToDo: string[] = [];
+  const byHand: Plan['manual'] = [];
   for (const cmd of plan.commands ?? []) {
     const [command, ...args] = cmd.argv;
     const result = run(command, args);
-    if (result === 'missing') leftToDo.push(`${cmd.argv.join(' ')}   ${dim(`(${command} isn't installed here)`)}`);
+    if (result === 'missing' && cmd.ifMissing) byHand.push({ ...cmd.ifMissing, why: `${cmd.ifMissing.why} (${command} isn't installed here)` });
+    else if (result === 'missing') leftToDo.push(`${cmd.argv.join(' ')}   ${dim(`(${command} isn't installed here)`)}`);
     else if (result === 'failed') leftToDo.push(cmd.argv.join(' '));
   }
-  say(`${green('◇')} ${leftToDo.length ? 'Set up — finish with:' : 'Packages installed'}`);
+  say(`${green('◇')} ${leftToDo.length ? 'Set up — finish with:' : byHand.length ? 'Set up — finish by hand (below)' : 'Packages installed'}`);
   for (const line of leftToDo) say(`${bar}   ${line}`);
 
-  for (const m of plan.manual) {
+  for (const m of [...byHand, ...plan.manual]) {
     say(bar);
     say(`${yellow('!')} ${bold(m.path)} — ${m.why}:`);
     for (const line of m.snippet.split('\n')) say(`${bar}   ${line}`);
