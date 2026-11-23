@@ -27,6 +27,11 @@ export interface Endpoint {
   key: string;
   /** The page's fetch as it was before instrumentation, so the SDK never traces itself. */
   fetch: typeof fetch;
+  /**
+   * False when the body doesn't leave the machine as it is (@zharp/electron hands it to the main
+   * process, which compresses and sends it): no gzip here. Default true.
+   */
+  compress?: boolean;
 }
 
 /** Shared by every sender on a page: one rejected key stops all of them, with one warning. */
@@ -44,7 +49,7 @@ export async function post(endpoint: Endpoint, signal: Signal, body: string, kee
   let payload: BodyInit = body;
   // gzip when it pays and the browser can; a keepalive request is sent as the page goes away,
   // with no time for an async compression step.
-  if (!keepalive && body.length > 2_048 && typeof CompressionStream !== 'undefined') {
+  if (!keepalive && endpoint.compress !== false && body.length > 2_048 && typeof CompressionStream !== 'undefined') {
     try {
       payload = await new Response(new Blob([body]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
       headers['Content-Encoding'] = 'gzip';

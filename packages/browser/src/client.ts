@@ -47,9 +47,27 @@ interface Running {
   teardowns: Array<() => void>;
 }
 
+/**
+ * @internal What a host around the page provides in place of the page's own: @zharp/electron's
+ * renderer sends through the main process and shares the main process's session.
+ */
+export interface BrowserHost {
+  /** Used in place of fetch to send each batch. */
+  fetch: typeof fetch;
+  /** The session, kept elsewhere. */
+  session: Session;
+  /** More resource attributes (the Electron version, the process). */
+  resource?: Record<string, unknown>;
+  /** The scope the records are sent under. */
+  scope?: { name: string; version: string };
+}
+
 export class ZharpBrowser {
   private running: Running | null = null;
   private user: ZharpUser | null = null;
+
+  constructor(private readonly host?: BrowserHost) {}
+
   private readonly tags: Record<string, unknown> = {};
   /** Errors already reported, so one caught by the app and then rethrown is sent once. */
   private readonly reported = new WeakSet<object>();
@@ -91,9 +109,12 @@ export class ZharpBrowser {
 
   private start(options: BrowserOptions): void {
     const endpointUrl = (options.endpoint || DEFAULT_ENDPOINT).replace(/\/+$/, '');
-    const endpoint: Endpoint = { url: endpointUrl, key: options.key, fetch: (globalThis as any).fetch };
+    const host = this.host;
+    const endpoint: Endpoint = host
+      ? { url: endpointUrl, key: options.key, fetch: host.fetch, compress: false }
+      : { url: endpointUrl, key: options.key, fetch: (globalThis as any).fetch };
     const service = options.service || 'web';
-    const session = new Session((options.sessionTimeoutMinutes ?? 30) * 60_000);
+    const session = host?.session ?? new Session((options.sessionTimeoutMinutes ?? 30) * 60_000);
     // A user set before init(), or remembered by the session from earlier in this tab.
     if (this.user) session.update({ user: this.user });
     else this.user = session.current.user ?? null;
@@ -112,8 +133,9 @@ export class ZharpBrowser {
       'os.name': platform.osName,
       'os.version': platform.osVersion,
       'user_agent.original': ua || undefined,
+      ...host?.resource,
     });
-    const scope = { name: '@zharp/browser', version: VERSION };
+    const scope = host?.scope ?? { name: '@zharp/browser', version: VERSION };
 
     const spans = new Exporter<unknown>(endpoint, 'traces', (records) => ({
       resourceSpans: [{ resource: { attributes: resource }, scopeSpans: [{ scope, spans: records }] }],
