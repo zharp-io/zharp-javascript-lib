@@ -363,4 +363,5 @@ export const GUIDES: Record<string, string> = {
   rack: 'https://zharp.io/docs/sdks/ruby',
   ruby: 'https://zharp.io/docs/sdks/ruby',
   dotnet: 'https://zharp.io/docs/sdks/dotnet',
+  godot: 'https://zharp.io/docs/sdks/godot',
 };

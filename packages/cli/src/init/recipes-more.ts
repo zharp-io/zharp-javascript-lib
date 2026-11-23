@@ -13,6 +13,7 @@ import { GO_ROUTERS, PYTHON_FRAMEWORKS, type GoRouter, type Project } from './de
 import type { Connected } from './connect';
 import type { Plan } from './recipes';
 import { dotnet } from './recipes-dotnet';
+import { godot } from './recipes-godot';
 
 export interface Command {
   /** What it does, for the plan: "install zharp into .venv". */
@@ -465,6 +466,8 @@ export function morePlanFor(project: Project, c: Connected, api: string): Plan |
       return plainRuby(c, api);
     case 'dotnet':
       return dotnet(project, c, api);
+    case 'godot':
+      return godot(project, c, api);
     default:
       return PYTHON_FRAMEWORKS.some((f) => f.id === project.framework) ? python(project, c, api) : null;
   }
