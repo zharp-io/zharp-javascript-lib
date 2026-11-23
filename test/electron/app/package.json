@@ -1,0 +1,7 @@
+{
+  "name": "zharp-electron-test",
+  "productName": "ZharpElectronTest",
+  "version": "1.2.3",
+  "private": true,
+  "main": "main.js"
+}
