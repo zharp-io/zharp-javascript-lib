@@ -20,5 +20,6 @@ export {
   type UploadOptions,
   type UploadResult,
 } from './sourcemaps';
+export { rustBuildId, rustCrateRoot, rustSourceFiles, uploadRustSources, type RustSourcesOptions } from './rust-sources';
 export { VERSION } from './version';
 export { defaultRelease, pluginLogger, processBuildOutput, type ProcessBuildResult, type ZharpPluginOptions } from './build';

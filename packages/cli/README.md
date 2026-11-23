@@ -74,6 +74,16 @@ npx zharp dsym upload "$DWARF_DSYM_FOLDER_PATH" --app 42
 
 Every `.dSYM` in the folder is read; each architecture is uploaded under its Mach-O UUID (the UUID a crash report lists for the binary image).
 
+## Rust
+
+With `zharp::build::id()` in the crate's `build.rs` (`zharp` in `[build-dependencies]` with `default-features = false`), upload the crate's code from CI so errors show the code that ran, without a linked repository:
+
+```bash
+npx @zharp/cli sources upload --app 42            # in the crate's folder, or: sources upload crates/api --app 42
+```
+
+The crate's `src/**/*.rs` files are uploaded as a source bundle under the build ID `build.rs` puts in the binary: a hash of those same files (their paths and bytes), computed the same way here, so nothing has to be passed between the build and the upload. It prints the build ID it used; `--build-id <id>` uploads under another one.
+
 ## Behaviour
 
 - Native symbol files are uploaded gzipped.

@@ -31,9 +31,12 @@ export interface CollectedSources {
   skipped: number;
 }
 
-/** The source files under `root` with these extensions, by path from `root`. */
-export function collectSources(root: string, extensions: string[], skipDirs: string[] = []): CollectedSources {
-  const skip = new Set([...SKIP_DIRS, ...skipDirs]);
+/**
+ * The source files under `root` with these extensions, by path from `root`. `defaultSkips: false`
+ * keeps every folder but `skipDirs` (a Rust crate's src/: a `build` or `test` module is code).
+ */
+export function collectSources(root: string, extensions: string[], skipDirs: string[] = [], defaultSkips = true): CollectedSources {
+  const skip = new Set([...(defaultSkips ? SKIP_DIRS : []), ...skipDirs]);
   const wanted = new Set(extensions.map((e) => e.toLowerCase()));
   const out: CollectedSources = { root, files: {}, count: 0, bytes: 0, skipped: 0 };
   const visit = (dir: string) => {
@@ -47,7 +50,7 @@ export function collectSources(root: string, extensions: string[], skipDirs: str
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         // Tests never crash in the shipped app: test/, integration_test/, Xcode's ShopTests/ShopUITests.
-        if (!skip.has(entry.name) && !/\.(xcassets|dSYM)$|Tests$/.test(entry.name)) visit(full);
+        if (!skip.has(entry.name) && (!defaultSkips || !/\.(xcassets|dSYM)$|Tests$/.test(entry.name))) visit(full);
         continue;
       }
       if (!entry.isFile()) continue;

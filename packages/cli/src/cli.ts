@@ -11,6 +11,7 @@ import { uploadReactNative, uploadReactNativeDir } from './react-native';
 import { injectDirectory, uploadSourcemaps } from './sourcemaps';
 import { VERSION } from './version';
 import { runInit } from './init';
+import { uploadRustSources } from './rust-sources';
 
 const HELP = `zharp ${VERSION} — readable stack traces for Zharp
 
@@ -28,6 +29,9 @@ Usage:
   zharp react-native upload --bundle <file> --map <file> --app <id>
                                                         A React Native release bundle's source map
   zharp react-native upload --dir dist --app <id>       Every bundle an \`npx expo export\` wrote (EAS Update)
+  zharp sources upload [dir] --app <id>                 A Rust crate's src/ as a source bundle, under the
+        [--build-id <id>] [--release <r>]               build ID zharp::build::id() puts in the binary
+                                                        (dir: default the nearest folder with Cargo.toml)
 
 Options:
   --app <id>          Application ID (or ZHARP_APP)
@@ -36,6 +40,7 @@ Options:
   --exclude <glob>    Not these files (repeatable; sourcemaps)
   --sources <dir>     The project whose sources go with the symbols (dart-symbols, dsym; default: found)
   --no-sources        Don't upload the app's sources (errors then show code only from a linked repo)
+  --build-id <id>     sources upload: this build ID instead of the one computed from src/**/*.rs
   --delete-after      Delete .map files after uploading them
   --dry-run           Show what would happen; change and send nothing
   --url <url>         Zharp API (default ZHARP_URL or https://api.zharp.io)
@@ -60,6 +65,7 @@ async function main(argv: string[]): Promise<void> {
       app: { type: 'string' },
       release: { type: 'string' },
       uuid: { type: 'string' },
+      'build-id': { type: 'string' },
       'obfuscation-map': { type: 'string' },
       sources: { type: 'string' },
       bundle: { type: 'string' },
@@ -146,6 +152,11 @@ async function main(argv: string[]): Promise<void> {
     case 'dsym upload': {
       const sources = values['no-sources'] ? false : values.sources;
       await uploadDsyms(needTarget('a .dSYM bundle or a folder of them'), connect(), { release, dryRun, logger, sources });
+      return;
+    }
+    case 'sources upload': {
+      if (values['build-id'] !== undefined && !values['build-id'].trim()) fail('--build-id needs a value.');
+      await uploadRustSources(target, connect(), { release, dryRun, logger, buildId: values['build-id']?.trim() });
       return;
     }
     default:
