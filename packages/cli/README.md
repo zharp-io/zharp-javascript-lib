@@ -1,6 +1,6 @@
 # @zharp/cli
 
-The `zharp` command: upload what [Zharp](https://zharp.io) needs to turn minified and obfuscated stack traces back into your source — JavaScript source maps, Android R8/ProGuard mappings, Flutter Dart symbols and iOS dSYMs.
+The `zharp` command: upload what [Zharp](https://zharp.io) needs to turn minified and obfuscated stack traces back into your source — JavaScript source maps, Android R8/ProGuard mappings, Flutter Dart symbols, iOS dSYMs, and the debug files of C/C++ apps that send minidumps.
 
 ```bash
 npm install --save-dev @zharp/cli    # or run it with npx zharp …
@@ -73,6 +73,20 @@ npx zharp dsym upload "$DWARF_DSYM_FOLDER_PATH" --app 42
 ```
 
 Every `.dSYM` in the folder is read; each architecture is uploaded under its Mach-O UUID (the UUID a crash report lists for the binary image).
+
+## C and C++ (minidumps)
+
+For apps that send crash dumps with Crashpad, Breakpad or Electron. After a release build, point it at the build output:
+
+```bash
+export ZHARP_AUTH_TOKEN=…   # better: from your CI's secrets
+npx zharp debug-files upload build/ --app 42 --include-sources
+```
+
+- PDBs (Windows), ELF files with debug info (Linux: unstripped binaries, `.so` files or separate `.debug` files) and Mach-O binaries or dSYMs (macOS) are turned into Breakpad `.sym` files with Mozilla's [dump_syms](https://github.com/mozilla/dump_syms), with inlined calls. `.sym` files you already make are uploaded as they are. Several paths can be given.
+- Each module is uploaded under the debug ID in its `.sym`'s `MODULE` line, the ID the minidump records for that module, and the module's debug file name. One upload per module: a stripped binary and its debug file give one `.sym`, the one with function names.
+- `--include-sources` also sends the app's source files the symbols name (not system or SDK headers), so crashes show the code of this build. When the build ran in another place (a container, a CI runner), `--sources <dir>` is where the same paths are found now.
+- dump_syms: `--dump-syms <path>` or `ZHARP_DUMP_SYMS` if you have one, else `dump_syms` on your PATH, else Mozilla's release 2.3.9 is downloaded once into your cache folder (`ZHARP_CACHE_DIR` to move it) and checked against the SHA-256 pinned in the CLI before it runs. Unpacking uses the system's `tar` (on Linux it needs `xz`). Windows on Arm runs the x64 build.
 
 ## Behaviour
 
