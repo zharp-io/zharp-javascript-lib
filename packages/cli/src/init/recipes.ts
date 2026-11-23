@@ -11,6 +11,7 @@ import type { Project } from './detect';
 import type { Connected } from './connect';
 import { morePlanFor, type Command } from './recipes-more';
 import { reactNativePlanFor } from './recipes-rn';
+import { elixirPlanFor } from './recipes-elixir';
 
 export interface Change {
   path: string;
@@ -346,7 +347,7 @@ function basePlanFor(project: Project, c: Connected, api: string): Plan | null {
     case 'nestjs':
       return nestjs(project, c, api);
     default:
-      return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api);
+      return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api) ?? elixirPlanFor(project, c, api);
   }
 }
 
@@ -363,4 +364,7 @@ export const GUIDES: Record<string, string> = {
   rack: 'https://zharp.io/docs/sdks/ruby',
   ruby: 'https://zharp.io/docs/sdks/ruby',
   dotnet: 'https://zharp.io/docs/sdks/dotnet',
+  phoenix: 'https://zharp.io/docs/sdks/elixir',
+  plug: 'https://zharp.io/docs/sdks/elixir',
+  elixir: 'https://zharp.io/docs/sdks/elixir',
 };

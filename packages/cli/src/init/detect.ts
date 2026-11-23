@@ -6,12 +6,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { detectDotnet } from './recipes-dotnet';
+import { detectElixir, type ElixirFramework } from './recipes-elixir';
 
 export type Framework =
   | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'dotnet' | RubyFramework | 'unknown';
+  | 'laravel' | 'go' | 'dotnet' | RubyFramework | ElixirFramework | 'unknown';
 
 /** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
 export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
@@ -58,7 +59,7 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'react-native' | 'dotnet' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'otel';
   /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
   dotenv?: boolean;
   packageManager: 'pnpm' | 'yarn' | 'bun' | 'npm';
@@ -99,6 +100,9 @@ export function detect(dir: string): Project {
   // Gemfiles (React Native's CocoaPods one, Sinatra next to a Node tool) are looked at last.
   const gemfile = read(join(dir, 'Gemfile'));
   if (gemfile !== null && isRails(dir, gemfile)) return { ...base, ...ruby(dir, gemfile) };
+  // Elixir: mix.exs (a Phoenix app's assets keep their own package.json).
+  const elixir = existsSync(join(dir, 'mix.exs')) ? detectElixir(dir) : null;
+  if (elixir) return { ...base, ...elixir };
 
   // Before React and Node: an app with react-native depends on react too.
   if (deps.expo) return { ...base, framework: 'expo', label: `Expo${majorOf(deps.expo).replace(/^ (\d+)$/, ' SDK $1')}`, catalog: 'React Native', platform: 'react-native' };
