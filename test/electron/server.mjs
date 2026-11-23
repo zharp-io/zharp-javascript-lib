@@ -41,8 +41,10 @@ export function standIn(port, dumpDir) {
         }
         const file = `${dumpDir}/${state.minidumps.length}.dmp`;
         if (dump) writeFileSync(file, dump);
-        state.minidumps.push({ key: url.searchParams.get('key'), annotations, file: dump ? file : null, size: dump?.length ?? 0 });
-        return res.writeHead(200, { 'content-type': 'text/plain' }).end('crash-id');
+        // Zharp answers with the crash's ID, which Electron lists in getUploadedReports.
+        const id = `11111111-2222-4333-8444-${String(state.minidumps.length).padStart(12, '0')}`;
+        state.minidumps.push({ id, key: url.searchParams.get('key'), annotations, file: dump ? file : null, size: dump?.length ?? 0 });
+        return res.writeHead(200, { 'content-type': 'text/plain' }).end(id);
       }
       if (req.method === 'OPTIONS') return res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' }).end();
       if (url.pathname === '/api/app/fail') return res.writeHead(500, { 'access-control-allow-origin': '*' }).end('nope');

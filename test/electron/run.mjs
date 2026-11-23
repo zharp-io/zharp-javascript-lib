@@ -135,17 +135,24 @@ if (!only) {
   await electron.evaluate(() => globalThis.test.crashWindow());
   const crasher = await until(() => electron.windows().find((p) => p.url().includes('crash.html')));
   await crasher.evaluate(() => window.crashNow()).catch(() => {});
-  const gone = await until(() => logRecords().find((r) => r.attrs['exception.type'] === 'RendererProcessGone'));
-  check(!!gone, 'process.crash() in a renderer: a RendererProcessGone event', logRecords().map((r) => r.attrs['exception.type']));
-  if (gone) check(gone.attrs['electron.process.reason'] === 'crashed' && gone.attrs['session.id'] === mainSession && gone.attrs['enduser.id'] === 'user-7', "…crashed, in main's session, with the user", gone.attrs);
   const rendererDump = await until(() => state.minidumps.find((d) => d.annotations.process_type === 'renderer'), 30_000);
-  check(!!rendererDump, "…and the renderer's minidump from Electron's crash reporter", state.minidumps);
+  check(!!rendererDump, "process.crash() in a renderer: its minidump from Electron's crash reporter", state.minidumps);
+  // The crash is the minidump's issue: main's own report of it is a log line naming that crash,
+  // not a second error.
+  const gone = await until(() => logRecords().find((r) => r.attrs['zharp.mechanism'] === 'render-process-gone'), 30_000);
+  check(!!gone && gone.attrs['zharp.minidump_id'] === rendererDump?.id && !gone.attrs['exception.type'], "…and main's report of it, a line naming that crash report (not a second error)", gone?.attrs);
+  if (gone) check(gone.attrs['electron.process.reason'] === 'crashed' && gone.attrs['session.id'] === mainSession && gone.attrs['enduser.id'] === 'user-7', "…crashed, in main's session, with the user", gone.attrs);
   if (rendererDump) {
     const a = rendererDump.annotations;
     check(rendererDump.key === 'zpk_electron_test', '…sent with the key in the URL');
     check(a['zharp.release'] === '1.2.3' && a['zharp.device_id'] === deviceId && a['zharp.session_id'] === mainSession && a['zharp.user.id'] === 'user-7', '…with release, device, session and user', a);
     check(!!a.ver && a.platform === process.platform && a.prod === 'Electron', `…and Electron's own fields (ver ${a.ver}, platform ${a.platform})`, a);
   }
+
+  // A window killed (no minidump): main's report is the error itself.
+  await electron.evaluate(() => globalThis.test.killWindow());
+  const killed = await until(() => logRecords().find((r) => r.attrs['exception.type'] === 'RendererProcessGone'));
+  check(!!killed && killed.attrs['electron.process.reason'] === 'killed' && !killed.attrs['zharp.minidump_id'], 'a window gone without a minidump: a RendererProcessGone error', killed?.attrs ?? logRecords().map((r) => r.attrs['zharp.mechanism']));
 
   // ── 3. an uncaught error in main ───────────────────────────────────────────────────
   await electron.evaluate(() => globalThis.test.mainThrow());

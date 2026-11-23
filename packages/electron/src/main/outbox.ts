@@ -10,7 +10,7 @@
  * Capped at 200 batches and 20 MB; past that the oldest go.
  */
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
@@ -42,6 +42,12 @@ export class Outbox {
   /** The network is usable (the app is ready): send what waited, then send as batches come. */
   start(fetch: Fetch): void {
     this.fetch = fetch;
+    // Held by a run that ended before deciding: sent as they were written.
+    try {
+      for (const name of readdirSync(this.dir).filter((n) => n.endsWith('.held'))) renameSync(join(this.dir, name), join(this.dir, name.slice(0, -'.held'.length)));
+    } catch {
+      // No folder yet.
+    }
     void this.drain();
   }
 
@@ -56,6 +62,22 @@ export class Outbox {
     if (!retryable(status)) return status;
     this.schedule();
     return this.store(signal, body) ? 202 : status;
+  }
+
+  /**
+   * Kept on disk but not sent yet, while main waits to know what to send (a crash event, until
+   * its minidump's upload is seen). One left by a run that ended meanwhile is sent at the next
+   * start, as it was written.
+   */
+  hold(signal: Signal, json: string): string | null {
+    return this.store(signal, gzipSync(json), '.held');
+  }
+
+  /** Send a held batch now, as `json` (the held one replaced). */
+  release(name: string | null, json: string): void {
+    if (name) rmSync(join(this.dir, name), { force: true });
+    const signal: Signal = name?.includes('.traces.') ? 'traces' : 'logs';
+    void this.sendDurably(signal, json);
   }
 
   /** Written first, then sent: for what must survive the app going down. */
@@ -150,11 +172,11 @@ export class Outbox {
     }
   }
 
-  private store(signal: Signal, body: Buffer): string | null {
+  private store(signal: Signal, body: Buffer, suffix = ''): string | null {
     try {
       mkdirSync(this.dir, { recursive: true });
       // Time first, so names sort oldest first; the random part keeps two in one millisecond apart.
-      const name = `${String(Date.now()).padStart(14, '0')}-${randomBytes(4).toString('hex')}.${signal}.json.gz`;
+      const name = `${String(Date.now()).padStart(14, '0')}-${randomBytes(4).toString('hex')}.${signal}.json.gz${suffix}`;
       writeFileSync(join(this.dir, name), body);
       this.trim();
       return name;

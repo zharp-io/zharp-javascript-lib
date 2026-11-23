@@ -26,8 +26,9 @@ failed queries, logs when asked for. It also:
 
 - starts Electron's crash reporter with Zharp's minidump endpoint, so a native crash in any process
   arrives with its stack, read with Electron's own symbols (fetched by Zharp, nothing to upload);
-- reports a window or helper process that crashed at once (`RendererProcessGone`,
-  `GPUProcessGone`…), written to disk first;
+- reports a window or helper process that went away, written to disk first: as a log line naming
+  the crash's minidump when it has one (one crash, one issue), else as the error
+  (`RendererProcessGone`, `GPUProcessGone`…);
 - keeps one session, a device ID per installation and the user for main and every window;
 - adds the windows' preload to every session.
 

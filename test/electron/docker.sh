@@ -14,7 +14,7 @@ electron=${ELECTRON:-45.4.1}
 rm -rf "$here/.packs" && mkdir -p "$here/.packs"
 for p in node electron cli; do (cd "$root/packages/$p" && pnpm pack --pack-destination "$here/.packs" >/dev/null); done
 docker build -q --build-arg ELECTRON="$electron" -t "zharp-electron-test:$electron" "$here"
-MSYS_NO_PATHCONV=1 docker run --rm --init --shm-size=1g -e WALK="${WALK:-}" -e ONLY="${ONLY:-}" -e VERBOSE="${VERBOSE:-}" -e ZHARP_DEBUG="${ZHARP_DEBUG:-}" \
+MSYS_NO_PATHCONV=1 docker run --rm --init --shm-size=1g -e WALK="${WALK:-}" -e ONLY="${ONLY:-}" -e VERBOSE="${VERBOSE:-}" -e ZHARP_DEBUG="${ZHARP_DEBUG:-}" -e ZHARP_DEBUG_REPORTS="${ZHARP_DEBUG_REPORTS:-}" \
   -v "$mount:/test:ro" -v "$out:/out" -v zharp-electron-npm:/root/.npm -v zharp-electron-syms:/syms \
   "zharp-electron-test:$electron" sh -c 'cp -r /test/app /work/app && cp /test/.packs/*.tgz /work/ && cd /work/app && \
     npm install --no-audit --no-fund --legacy-peer-deps /work/*.tgz >/dev/null && \

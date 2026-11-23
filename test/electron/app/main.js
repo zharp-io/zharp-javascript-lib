@@ -28,6 +28,11 @@ globalThis.test = {
   mainCrash() {
     setTimeout(() => process.crash(), 50);
   },
+  async killWindow() {
+    const w = new BrowserWindow({ title: 'killed', webPreferences: { sandbox: true } });
+    await w.loadFile(join(__dirname, 'crash.html'));
+    process.kill(w.webContents.getOSProcessId(), 'SIGKILL');
+  },
   crashWindow() {
     const w = new BrowserWindow({ title: 'crasher', webPreferences: { nodeIntegration: true, contextIsolation: false, sandbox: false } });
     return w.loadFile(join(__dirname, 'crash.html'));

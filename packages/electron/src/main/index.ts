@@ -146,6 +146,8 @@ export class ZharpElectron {
   private running: Running | null = null;
   private user: User | null = null;
   private readonly tags: Record<string, string | number | boolean> = {};
+  /** Crash reports already uploaded (earlier runs) or matched to a crash: never matched again. */
+  private readonly knownReports = new Set<string>();
 
   /** `Zharp.log.info("Order placed", { orderId })` — and debug, warn, error, fatal, trace. */
   readonly log: Record<Level, LogFn> = NodeZharp.log;
@@ -330,6 +332,7 @@ export class ZharpElectron {
         // Every process's reports: the GPU process and utility processes too.
         globalExtra: extra,
       });
+      for (const report of crashReporter.getUploadedReports()) this.knownReports.add(report.id);
       this.crashParameters();
     } catch (error) {
       console.warn(`[Zharp] Couldn't start the crash reporter: ${(error as Error)?.message ?? error}`);
@@ -482,61 +485,110 @@ export class ZharpElectron {
     t.push(() => clearInterval(timer));
   }
 
-  /** A crash event for a process that went away, written to disk before it is sent. */
+  /**
+   * A process that went away, reported from main, which is still running.
+   *
+   * When it crashed and the crash reporter is on, Electron's crash reporter uploads its minidump
+   * too — the crash with its native stack, as its own issue. The two would be one crash counted
+   * twice, so main waits for that upload (Zharp answers it with the crash's ID, which Electron
+   * lists in getUploadedReports): once it's there, this is sent as a log line naming the crash
+   * (`zharp.minidump_id`) instead of a second error. Without a dump (killed, out of memory, the
+   * crash reporter off, the upload failing), it's sent as the error. Either way it's on disk
+   * first, so an app that goes down meanwhile sends the error on its next start.
+   */
   private processGone(running: Running, type: string, reason: string, exitCode: number, attributes: Attributes): void {
     try {
+      const goneAt = Date.now();
       const kind = type === 'renderer' ? 'Renderer' : type === 'GPU' ? 'GPU' : type;
-      const exceptionType = `${kind.replace(/\s+/g, '')}ProcessGone`;
+      const exceptionType = `${kind.replace(/s+/g, '')}ProcessGone`;
       const what = type === 'renderer' ? 'A window' : `The ${type} process`;
       const how =
         reason === 'crashed' ? 'crashed' : reason === 'oom' ? 'ran out of memory' : reason === 'killed' ? 'was killed' : reason === 'launch-failed' ? "couldn't start" : reason === 'integrity-failure' ? 'failed its code integrity check' : `exited abnormally`;
       const message = `${what} ${how} (${reason}, exit code ${exitCode})`;
-      const time = `${Date.now()}000000`;
+      const time = `${goneAt}000000`;
       const user = this.user;
-      const record = {
+      const context = {
+        ...this.tags,
+        ...attributes,
+        'zharp.mechanism': type === 'renderer' ? 'render-process-gone' : 'child-process-gone',
+        'electron.process.type': type,
+        'electron.process.reason': reason,
+        'electron.process.exit_code': exitCode,
+        'session.id': running.session.id,
+        'enduser.id': user ? String(user.id) : undefined,
+        'enduser.email': user?.email,
+        'enduser.name': user?.name,
+      };
+      const envelope = (record: unknown) =>
+        JSON.stringify({
+          resourceLogs: [
+            {
+              resource: {
+                attributes: keyValues({
+                  'service.name': running.service,
+                  'service.version': running.release,
+                  'deployment.environment.name': running.environment,
+                  'telemetry.sdk.name': 'zharp',
+                  'telemetry.sdk.language': 'nodejs',
+                  'telemetry.sdk.version': VERSION,
+                  ...running.resource,
+                }),
+              },
+              scopeLogs: [{ scope: { name: '@zharp/electron', version: VERSION }, logRecords: [record] }],
+            },
+          ],
+        });
+      const asError = envelope({
         timeUnixNano: time,
         observedTimeUnixNano: time,
         severityNumber: SEVERITY.fatal,
         severityText: 'FATAL',
         body: str(`${exceptionType}: ${message}`),
-        attributes: keyValues({
-          ...this.tags,
-          ...attributes,
-          'exception.type': exceptionType,
-          'exception.message': message,
-          'zharp.handled': 'false',
-          'zharp.mechanism': type === 'renderer' ? 'render-process-gone' : 'child-process-gone',
-          'electron.process.type': type,
-          'electron.process.reason': reason,
-          'electron.process.exit_code': exitCode,
-          'session.id': running.session.id,
-          'enduser.id': user ? String(user.id) : undefined,
-          'enduser.email': user?.email,
-          'enduser.name': user?.name,
-        }),
-      };
-      const body = {
-        resourceLogs: [
-          {
-            resource: {
-              attributes: keyValues({
-                'service.name': running.service,
-                'service.version': running.release,
-                'deployment.environment.name': running.environment,
-                'telemetry.sdk.name': 'zharp',
-                'telemetry.sdk.language': 'nodejs',
-                'telemetry.sdk.version': VERSION,
-                ...running.resource,
-              }),
-            },
-            scopeLogs: [{ scope: { name: '@zharp/electron', version: VERSION }, logRecords: [record] }],
-          },
-        ],
-      };
-      void running.outbox.sendDurably('logs', JSON.stringify(body));
+        attributes: keyValues({ ...context, 'exception.type': exceptionType, 'exception.message': message, 'zharp.handled': 'false' }),
+      });
+      const asLine = (minidumpId: string) =>
+        envelope({
+          timeUnixNano: time,
+          observedTimeUnixNano: time,
+          severityNumber: SEVERITY.warn,
+          severityText: 'WARN',
+          body: str(`${message}; its crash report is ${minidumpId}`),
+          attributes: keyValues({ ...context, 'zharp.minidump_id': minidumpId }),
+        });
+
+      const dumpExpected = reason === 'crashed' && running.options.crashReporter !== false;
+      if (!dumpExpected) {
+        void running.outbox.sendDurably('logs', asError);
+        return;
+      }
+      const held = running.outbox.hold('logs', asError);
+      void this.minidumpUploaded().then((id) => {
+        running.outbox.release(held, id ? asLine(id) : asError);
+      });
     } catch {
       // Never throw into the app.
     }
+  }
+
+  /**
+   * The ID Zharp gave the next crash report Electron uploads, waiting up to 15 seconds for it. A
+   * report is new when it wasn't in the list when Zharp started or claimed by an earlier crash.
+   */
+  private async minidumpUploaded(): Promise<string | null> {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      try {
+        for (const report of crashReporter.getUploadedReports()) {
+          if (this.knownReports.has(report.id)) continue;
+          this.knownReports.add(report.id);
+          return report.id;
+        }
+      } catch {
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return null;
   }
 
   /**
