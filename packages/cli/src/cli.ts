@@ -22,7 +22,8 @@ Usage:
         [--yes] [--dry-run]                             (signs in through the browser)
   zharp sourcemaps inject <dir>                         Add debug IDs to JS files and their maps
   zharp sourcemaps upload <dir> --app <id>              Upload JS files and their maps
-        [--release <r>] [--delete-after]
+        [--release <r>] [--delete-after]                (files without debug IDs, as Wrangler builds
+                                                        a Worker, are matched by --release)
   zharp proguard upload <mapping.txt> --app <id> --uuid <uuid>
   zharp dart-symbols upload <dir> --app <id>            Flutter --split-debug-info output
         [--obfuscation-map <file>]                      (and its obfuscation map)

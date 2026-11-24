@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { detectCloudflare } from './recipes-cloudflare';
 import { detectDotnet } from './recipes-dotnet';
 import { detectScripts } from './recipes-scripts';
 import { detectRust } from './recipes-rust';
@@ -16,7 +17,7 @@ export type Framework =
   | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'dotnet' | 'rust' | 'godot' | 'unity' | RubyFramework | ElixirFramework | 'powershell' | 'shell' | 'unknown';
+  | 'laravel' | 'go' | 'dotnet' | 'rust' | 'godot' | 'unity' | RubyFramework | ElixirFramework | 'cloudflare-workers' | 'cloudflare-pages' | 'powershell' | 'shell' | 'unknown';
 
 /** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
 export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
@@ -63,9 +64,11 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'rust' | 'godot' | 'unity' | 'powershell' | 'shell' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'rust' | 'godot' | 'unity' | 'cloudflare' | 'powershell' | 'shell' | 'otel';
   /** PowerShell and shell: the script the setup lines go in. */
   entry?: string;
+  /** Cloudflare: the Wrangler config (wrangler.jsonc, wrangler.toml…). */
+  wranglerConfig?: string;
   /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
   dotenv?: boolean;
   packageManager: 'pnpm' | 'yarn' | 'bun' | 'npm';
@@ -124,6 +127,14 @@ export function detect(dir: string): Project {
   // Before React and Node: an app with react-native depends on react too.
   if (deps.expo) return { ...base, framework: 'expo', label: `Expo${majorOf(deps.expo).replace(/^ (\d+)$/, ' SDK $1')}`, catalog: 'React Native', platform: 'react-native' };
   if (deps['react-native']) return { ...base, framework: 'react-native', label: `React Native${/(\d+\.\d+)/.exec(deps['react-native'])?.[1] ? ` ${/(\d+\.\d+)/.exec(deps['react-native'])![1]}` : ''}`, catalog: 'React Native', platform: 'react-native' };
+  // A Wrangler project: a Worker (Hono and the like included) or Pages Functions. Frameworks on their
+  // own Cloudflare adapter (OpenNext, Astro…) are left to their own setup.
+  const cloudflare = detectCloudflare(dir, deps);
+  if (cloudflare) {
+    return cloudflare.pages
+      ? { ...base, framework: 'cloudflare-pages', label: 'Cloudflare Pages', catalog: 'Cloudflare Pages', platform: 'cloudflare', wranglerConfig: cloudflare.config }
+      : { ...base, framework: 'cloudflare-workers', label: deps.hono ? 'Cloudflare Workers (Hono)' : 'Cloudflare Workers', catalog: 'Cloudflare Workers', platform: 'cloudflare', wranglerConfig: cloudflare.config };
+  }
   if (deps.next) {
     const appDir = existsSync(join(dir, 'src', 'app')) ? 'src/app' : existsSync(join(dir, 'app')) ? 'app' : undefined;
     return { ...base, framework: 'nextjs', label: `Next.js${majorOf(deps.next)}`, catalog: 'Next.js', platform: 'browser', appDir };

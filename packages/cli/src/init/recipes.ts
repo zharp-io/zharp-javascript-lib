@@ -13,6 +13,7 @@ import { morePlanFor, type Command } from './recipes-more';
 import { reactNativePlanFor } from './recipes-rn';
 import { powershellPlan, shellPlan } from './recipes-scripts';
 import { elixirPlanFor } from './recipes-elixir';
+import { pagesPlan, workersPlan } from './recipes-cloudflare';
 
 export interface Change {
   path: string;
@@ -351,6 +352,10 @@ function basePlanFor(project: Project, c: Connected, api: string): Plan | null {
       return powershellPlan(project.entry ?? 'script.ps1', c, api);
     case 'shell':
       return shellPlan(project.entry ?? 'script.sh', c, api);
+    case 'cloudflare-workers':
+      return workersPlan(project, c, api, project.wranglerConfig ?? 'wrangler.jsonc');
+    case 'cloudflare-pages':
+      return pagesPlan(project, c, api, project.wranglerConfig ?? null);
     default:
       return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api) ?? elixirPlanFor(project, c, api);
   }
@@ -377,4 +382,6 @@ export const GUIDES: Record<string, string> = {
   elixir: 'https://zharp.io/docs/sdks/elixir',
   godot: 'https://zharp.io/docs/sdks/godot',
   unity: 'https://zharp.io/docs/sdks/unity',
+  'cloudflare-workers': 'https://zharp.io/docs/sdks/cloudflare',
+  'cloudflare-pages': 'https://zharp.io/docs/sdks/cloudflare',
 };
