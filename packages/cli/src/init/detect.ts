@@ -9,12 +9,13 @@ import { detectDotnet } from './recipes-dotnet';
 import { detectScripts } from './recipes-scripts';
 import { detectRust } from './recipes-rust';
 import { detectElixir, type ElixirFramework } from './recipes-elixir';
+import { detectGodot } from './recipes-godot';
 
 export type Framework =
   | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'dotnet' | 'rust' | RubyFramework | ElixirFramework | 'powershell' | 'shell' | 'unknown';
+  | 'laravel' | 'go' | 'dotnet' | 'rust' | 'godot' | RubyFramework | ElixirFramework | 'powershell' | 'shell' | 'unknown';
 
 /** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
 export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
@@ -61,7 +62,7 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'rust' | 'powershell' | 'shell' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'rust' | 'godot' | 'powershell' | 'shell' | 'otel';
   /** PowerShell and shell: the script the setup lines go in. */
   entry?: string;
   /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
@@ -99,6 +100,12 @@ export function detect(dir: string): Project {
   const deps: Record<string, string> = { ...(pkg?.dependencies ?? {}), ...(pkg?.devDependencies ?? {}) };
   const name = (typeof pkg?.name === 'string' && pkg.name.replace(/^@[^/]+\//, '')) || basename(dir);
   const base = { dir, name, packageManager: packageManagerOf(dir), typescript: !!deps.typescript || existsSync(join(dir, 'tsconfig.json')), packageJson: pkg ?? undefined };
+
+  // Godot: project.godot says so, whatever else is in the folder (a C# game has a .csproj too).
+  const game = detectGodot(dir);
+  if (game) {
+    return { ...base, name: game.name, framework: 'godot', label: `Godot${game.version ? ` ${game.version}` : ''}${game.csproj ? ' (C#)' : ''}`, catalog: 'Godot', platform: 'godot' };
+  }
 
   // A Rails app's package.json (esbuild, Vite, React) is its front end: the app is Rails. Other
   // Gemfiles (React Native's CocoaPods one, Sinatra next to a Node tool) are looked at last.

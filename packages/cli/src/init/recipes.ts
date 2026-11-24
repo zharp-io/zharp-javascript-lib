@@ -375,4 +375,5 @@ export const GUIDES: Record<string, string> = {
   phoenix: 'https://zharp.io/docs/sdks/elixir',
   plug: 'https://zharp.io/docs/sdks/elixir',
   elixir: 'https://zharp.io/docs/sdks/elixir',
+  godot: 'https://zharp.io/docs/sdks/godot',
 };
