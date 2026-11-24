@@ -376,4 +376,5 @@ export const GUIDES: Record<string, string> = {
   plug: 'https://zharp.io/docs/sdks/elixir',
   elixir: 'https://zharp.io/docs/sdks/elixir',
   godot: 'https://zharp.io/docs/sdks/godot',
+  unity: 'https://zharp.io/docs/sdks/unity',
 };

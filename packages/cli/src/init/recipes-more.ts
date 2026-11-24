@@ -15,6 +15,7 @@ import type { Plan } from './recipes';
 import { dotnet } from './recipes-dotnet';
 import { rust } from './recipes-rust';
 import { godot } from './recipes-godot';
+import { unity } from './recipes-unity';
 
 export interface Command {
   /** What it does, for the plan: "install zharp into .venv". */
@@ -473,6 +474,8 @@ export function morePlanFor(project: Project, c: Connected, api: string): Plan |
       return rust(project, c, api);
     case 'godot':
       return godot(project, c, api);
+    case 'unity':
+      return unity(project, c, api);
     default:
       return PYTHON_FRAMEWORKS.some((f) => f.id === project.framework) ? python(project, c, api) : null;
   }

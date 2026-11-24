@@ -10,12 +10,13 @@ import { detectScripts } from './recipes-scripts';
 import { detectRust } from './recipes-rust';
 import { detectElixir, type ElixirFramework } from './recipes-elixir';
 import { detectGodot } from './recipes-godot';
+import { detectUnity } from './recipes-unity';
 
 export type Framework =
   | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'dotnet' | 'rust' | 'godot' | RubyFramework | ElixirFramework | 'powershell' | 'shell' | 'unknown';
+  | 'laravel' | 'go' | 'dotnet' | 'rust' | 'godot' | 'unity' | RubyFramework | ElixirFramework | 'powershell' | 'shell' | 'unknown';
 
 /** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
 export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
@@ -62,7 +63,7 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'rust' | 'godot' | 'powershell' | 'shell' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'rust' | 'godot' | 'unity' | 'powershell' | 'shell' | 'otel';
   /** PowerShell and shell: the script the setup lines go in. */
   entry?: string;
   /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
@@ -105,6 +106,11 @@ export function detect(dir: string): Project {
   const game = detectGodot(dir);
   if (game) {
     return { ...base, name: game.name, framework: 'godot', label: `Godot${game.version ? ` ${game.version}` : ''}${game.csproj ? ' (C#)' : ''}`, catalog: 'Godot', platform: 'godot' };
+  }
+  // Unity: ProjectVersion.txt says so, whatever else is in the folder (the IDE's .csproj and .sln files).
+  const unityGame = detectUnity(dir);
+  if (unityGame) {
+    return { ...base, name: unityGame.name, framework: 'unity', label: `Unity${unityGame.version ? ` ${unityGame.version}` : ''}`, catalog: 'Unity', platform: 'unity' };
   }
 
   // A Rails app's package.json (esbuild, Vite, React) is its front end: the app is Rails. Other
