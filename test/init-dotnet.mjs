@@ -1,6 +1,6 @@
 /**
  * `zharp init` for .NET: ASP.NET Core, a worker, a console app, AWS Lambda, Google Cloud
- * Functions, classic ASP.NET, central package management, and apps (a later release).
+ * Functions, classic ASP.NET, central package management, and apps (MAUI, WPF, Windows Forms).
  *
  *     node test/init-dotnet.mjs
  */
@@ -62,7 +62,7 @@ await test('ASP.NET Core: the package and embedded sources in the .csproj, AddZh
   assert.equal(p.name, 'Shop.Api');
   const plan = planFor(p, c, API);
   const csproj = change(plan, 'Shop.Api.csproj').content;
-  assert.match(csproj, /<PackageReference Include="Zharp\.AspNetCore" Version="0\.1\.0" \/>/);
+  assert.match(csproj, /<PackageReference Include="Zharp\.AspNetCore" Version="0\.2\.0" \/>/);
   assert.match(csproj, /<PropertyGroup>\n    <!-- Zharp: [^\n]+ -->\n    <EmbedAllSources>true<\/EmbedAllSources>\n    <TargetFramework>/);
   assert.equal(change(plan, 'Program.cs').content, MINIMAL.replace('(args);\n', '(args);\nbuilder.Services.AddZharp();\n'));
   const settings = JSON.parse(change(plan, 'appsettings.json').content);
@@ -94,7 +94,7 @@ await test('central package management: `dotnet add package`, the .csproj only e
     'Api/Program.cs': MINIMAL,
   });
   const plan = planFor(p, c, API);
-  assert.deepEqual(plan.commands.map((x) => x.argv), [['dotnet', 'add', 'Api/Api.csproj', 'package', 'Zharp.AspNetCore', '--version', '0.1.0']]);
+  assert.deepEqual(plan.commands.map((x) => x.argv), [['dotnet', 'add', 'Api/Api.csproj', 'package', 'Zharp.AspNetCore', '--version', '0.2.0']]);
   assert.doesNotMatch(change(plan, 'Api/Api.csproj').content, /PackageReference/);
 });
 
@@ -106,7 +106,7 @@ await test('a worker (Generic Host): Zharp and AddZharp() on Host.CreateApplicat
   });
   assert.equal(p.catalog, '.NET');
   const plan = planFor(p, c, API);
-  assert.match(change(plan, 'Worker.csproj').content, /<ItemGroup>\n    <PackageReference Include="Zharp" Version="0\.1\.0" \/>\n    <PackageReference Include="Microsoft\.Extensions\.Hosting"/);
+  assert.match(change(plan, 'Worker.csproj').content, /<ItemGroup>\n    <PackageReference Include="Zharp" Version="0\.2\.0" \/>\n    <PackageReference Include="Microsoft\.Extensions\.Hosting"/);
   assert.ok(change(plan, 'Program.cs').content.startsWith('var builder = Host.CreateApplicationBuilder(args);\nbuilder.Services.AddZharp();\n'));
 });
 
@@ -169,7 +169,7 @@ await test('classic ASP.NET (packages.config): the key in Web.config, Install-Pa
   assert.equal(p.catalog, 'ASP.NET');
   const plan = planFor(p, c, API);
   assert.match(change(plan, 'Shop/Web.config').content, /<appSettings>\n    <add key="Zharp:Key" value="zpk_abc" \/>\n    <add key="webpages:Version"/);
-  assert.equal(plan.manual[0].snippet, 'Install-Package Zharp.AspNet -Version 0.1.0');
+  assert.equal(plan.manual[0].snippet, 'Install-Package Zharp.AspNet -Version 0.2.0');
   const csproj = change(plan, 'Shop/Shop.csproj').content;
   assert.match(csproj, /<EmbedAllSources>true<\/EmbedAllSources>/);
   assert.doesNotMatch(csproj, /PackageReference/);
@@ -184,7 +184,7 @@ await test('Web API 2 (classic): Zharp.AspNet.WebApi and config.AddZharp() in We
   });
   assert.equal(p.catalog, 'ASP.NET');
   const plan = planFor(p, c, API);
-  assert.equal(plan.manual[0].snippet, 'Install-Package Zharp.AspNet.WebApi -Version 0.1.0');
+  assert.equal(plan.manual[0].snippet, 'Install-Package Zharp.AspNet.WebApi -Version 0.2.0');
   assert.ok(change(plan, 'Api/App_Start/WebApiConfig.cs').content.includes(['    {', '        config.AddZharp();', '        config.MapHttpAttributeRoutes();'].join(NL)));
   assert.ok(change(plan, 'Api/Web.config').content.includes('<add key="Zharp:Key" value="zpk_abc" />'));
 });
@@ -197,8 +197,8 @@ await test('a build without a PDB (DebugType none): no EmbedAllSources (CS2045),
   const plan = planFor(p, c, API);
   const csproj = change(plan, 'Api.csproj');
   assert.ok(!csproj.content.includes('EmbedAllSources'));
-  assert.ok(csproj.content.includes('<PackageReference Include="Zharp.AspNetCore" Version="0.1.0" />'));
-  assert.ok(csproj.content.includes('<PackageReference Include="Zharp.Build" Version="0.1.0" PrivateAssets="all" />'));
+  assert.ok(csproj.content.includes('<PackageReference Include="Zharp.AspNetCore" Version="0.2.0" />'));
+  assert.ok(csproj.content.includes('<PackageReference Include="Zharp.Build" Version="0.2.0" PrivateAssets="all" />'));
   assert.equal(csproj.note, 'adds Zharp.AspNetCore and Zharp.Build');
   assert.ok(plan.notes.some((n) => n.includes('without a PDB') && n.includes('ZHARP_APP_ID=42')));
 });
@@ -210,14 +210,86 @@ await test('DebugType none from a Directory.Build.props counts too; embedded PDB
   assert.ok(change(planFor(q, c, API), 'Api.csproj').content.includes('<EmbedAllSources>true</EmbedAllSources>'));
 });
 
-await test('apps (MAUI, WPF, Windows Forms) come later: no recipe, a guide', () => {
-  const p = project('wpf', { 'Desk.csproj': '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <UseWPF>true</UseWPF>\n  </PropertyGroup>\n</Project>\n' });
-  assert.equal(p.framework, 'dotnet');
-  assert.equal(planFor(p, c, API), null);
+const MAUI_CSPROJ = ['<Project Sdk="Microsoft.NET.Sdk">', '', '\t<PropertyGroup>', '\t\t<TargetFrameworks>net10.0-android;net10.0-ios</TargetFrameworks>', '\t\t<OutputType>Exe</OutputType>', '\t\t<UseMaui>true</UseMaui>', '\t</PropertyGroup>', '', '\t<ItemGroup>', '\t\t<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />', '\t</ItemGroup>', '', '</Project>', ''].join(NL);
+const MAUI_PROGRAM = ['namespace Shop;', '', 'public static class MauiProgram', '{', '\tpublic static MauiApp CreateMauiApp()', '\t{', '\t\tvar builder = MauiApp.CreateBuilder();', '\t\tbuilder', '\t\t\t.UseMauiApp<App>()', '\t\t\t.ConfigureFonts(fonts =>', '\t\t\t{', '\t\t\t\tfonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");', '\t\t\t});', '', '\t\treturn builder.Build();', '\t}', '}', ''].join(NL);
+const WPF_CSPROJ = ['<Project Sdk="Microsoft.NET.Sdk">', '', '  <PropertyGroup>', '    <OutputType>WinExe</OutputType>', '    <TargetFramework>net10.0-windows</TargetFramework>', '    <UseWPF>true</UseWPF>', '  </PropertyGroup>', '', '</Project>', ''].join(NL);
+const WPF_APP = ['using System.Configuration;', 'using System.Data;', 'using System.Windows;', '', 'namespace Desk;', '', '/// <summary>', '/// Interaction logic for App.xaml', '/// </summary>', 'public partial class App : Application', '{', '}', ''].join(NL);
+const FORMS_PROGRAM = ['namespace Desk;', '', 'static class Program', '{', '    [STAThread]', '    static void Main()', '    {', '        ApplicationConfiguration.Initialize();', '        Application.Run(new Form1());', '    }', '}', ''].join(NL);
+
+await test('MAUI: Zharp.Maui and Zharp.Build with the app ID, UseZharp() after UseMauiApp, no embedded sources', () => {
+  const p = project('maui', { 'Shop/Shop.csproj': MAUI_CSPROJ, 'Shop/MauiProgram.cs': MAUI_PROGRAM, 'Shop.Core/Shop.Core.csproj': '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>' });
+  assert.equal(p.platform, 'dotnet');
+  assert.equal(p.catalog, '.NET MAUI');
+  assert.equal(p.name, 'Shop');
+  const plan = planFor(p, c, API);
+  const csproj = change(plan, 'Shop/Shop.csproj').content;
+  assert.match(csproj, /<PackageReference Include="Zharp\.Maui" Version="0\.2\.0" \/>/);
+  assert.match(csproj, /<PackageReference Include="Zharp\.Build" Version="0\.2\.0" PrivateAssets="all" \/>/);
+  assert.match(csproj, /<ZharpAppId>42<\/ZharpAppId>/);
+  assert.ok(!csproj.includes('EmbedAllSources'), 'apps never embed their sources');
+  assert.equal(change(plan, 'Shop/MauiProgram.cs').content, MAUI_PROGRAM.replace('.UseMauiApp<App>()', '.UseMauiApp<App>()\n\t\t\t.UseZharp(o => o.Key = "zpk_abc")'));
+  assert.ok(plan.notes.some((n) => n.includes('ZHARP_AUTH_TOKEN')));
+});
+
+await test('MAUI on one line, and a self-hosted Zharp', () => {
+  const program = MAUI_PROGRAM.replace('\t\tbuilder\n\t\t\t.UseMauiApp<App>()', '\t\tbuilder.UseMauiApp<App>()');
+  const p = project('maui-line', { 'Shop.csproj': MAUI_CSPROJ, 'MauiProgram.cs': program });
+  const next = change(planFor(p, c, 'https://zharp.example.com'), 'MauiProgram.cs').content;
+  assert.ok(next.includes('\t\tbuilder.UseMauiApp<App>()\n\t\t    .UseZharp(o => { o.Key = "zpk_abc"; o.Endpoint = "https://zharp.example.com/api/v1/otlp"; })'), next);
+});
+
+await test('WPF: Zharp.Windows, and an OnStartup override that starts Zharp first', () => {
+  const p = project('wpf', { 'Desk.csproj': WPF_CSPROJ, 'App.xaml.cs': WPF_APP });
+  assert.equal(p.catalog, 'WPF');
+  const plan = planFor(p, c, API);
+  assert.match(change(plan, 'Desk.csproj').content, /Include="Zharp\.Windows"/);
+  assert.equal(change(plan, 'App.xaml.cs').content, WPF_APP.replace('{\n}', [
+    '{',
+    '    protected override void OnStartup(StartupEventArgs e)',
+    '    {',
+    '        Zharp.ZharpApp.Start(o => o.Key = "zpk_abc");',
+    '        base.OnStartup(e);',
+    '    }',
+    '}',
+  ].join(NL)));
+});
+
+await test('WPF with its own OnStartup: Zharp goes first in it', () => {
+  const app = WPF_APP.replace('{\n}', '{\n    protected override void OnStartup(StartupEventArgs e)\n    {\n        base.OnStartup(e);\n        new MainWindow().Show();\n    }\n}');
+  const p = project('wpf-startup', { 'Desk.csproj': WPF_CSPROJ, 'App.xaml.cs': app });
+  const next = change(planFor(p, c, API), 'App.xaml.cs').content;
+  assert.ok(next.includes('    {\n        Zharp.ZharpApp.Start(o => o.Key = "zpk_abc");\n        base.OnStartup(e);'), next);
+});
+
+await test('Windows Forms: ZharpApp.Start() first in Main; central package management adds both packages with dotnet add', () => {
+  const p = project('forms', {
+    'Directory.Packages.props': '<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup></Project>',
+    'Desk/Desk.csproj': WPF_CSPROJ.replace('UseWPF', 'UseWindowsForms').replace('UseWPF', 'UseWindowsForms'),
+    'Desk/Program.cs': FORMS_PROGRAM,
+  });
+  assert.equal(p.catalog, 'Windows Forms');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.slice(3, 5)), [['package', 'Zharp.Windows'], ['package', 'Zharp.Build']]);
+  const csproj = change(plan, 'Desk/Desk.csproj').content;
+  assert.ok(!csproj.includes('PackageReference Include="Zharp'));
+  assert.match(csproj, /<ZharpAppId>42<\/ZharpAppId>/);
+  assert.equal(change(plan, 'Desk/Program.cs').content, FORMS_PROGRAM.replace('    {\n        ApplicationConfiguration', '    {\n        Zharp.ZharpApp.Start(o => o.Key = "zpk_abc");\n        ApplicationConfiguration'));
+});
+
+await test('an app that embeds its sources is told they ship to users; set up twice, nothing changes', () => {
+  const csproj = WPF_CSPROJ.replace('<UseWPF>true</UseWPF>', '<UseWPF>true</UseWPF>\n    <EmbedAllSources>true</EmbedAllSources>');
+  const p = project('wpf-embed', { 'Desk.csproj': csproj, 'App.xaml.cs': WPF_APP });
+  const plan = planFor(p, c, API);
+  assert.ok(plan.notes.some((n) => n.includes('ship to everyone')));
+  const done = project('wpf-done', { 'Desk.csproj': change(plan, 'Desk.csproj').content, 'App.xaml.cs': change(plan, 'App.xaml.cs').content });
+  const again = planFor(done, c, API);
+  assert.ok(!change(again, 'Desk.csproj'));
+  assert.ok(!change(again, 'App.xaml.cs'));
+  assert.equal(again.manual.length, 0);
 });
 
 await test('nothing twice: a project already set up changes nothing in Program.cs or the .csproj', () => {
-  const csproj = WEB_CSPROJ.replace('<PropertyGroup>\n', '<PropertyGroup>\n    <EmbedAllSources>true</EmbedAllSources>\n').replace('</Project>', '  <ItemGroup>\n    <PackageReference Include="Zharp.AspNetCore" Version="0.1.0" />\n  </ItemGroup>\n</Project>');
+  const csproj = WEB_CSPROJ.replace('<PropertyGroup>\n', '<PropertyGroup>\n    <EmbedAllSources>true</EmbedAllSources>\n').replace('</Project>', '  <ItemGroup>\n    <PackageReference Include="Zharp.AspNetCore" Version="0.2.0" />\n  </ItemGroup>\n</Project>');
   const p = project('again', { 'Api.csproj': csproj, 'Program.cs': MINIMAL.replace('(args);\n', '(args);\nbuilder.Services.AddZharp();\n') });
   const plan = planFor(p, c, API);
   assert.ok(!change(plan, 'Api.csproj'));

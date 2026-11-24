@@ -12,7 +12,10 @@
  *   it can only send data to this one app, so it is safe in a repository, as Python and Go keep
  *   it in code. ZHARP_KEY in the environment wins over it.
  *
- * Apps (MAUI, WPF, Windows Forms) come in a later release: for those, where to read how.
+ * Apps (MAUI, WPF, Windows Forms) get Zharp.Maui or Zharp.Windows and one line at startup
+ * (UseZharp() in MauiProgram, ZharpApp.Start() in App.OnStartup or Main), and Zharp.Build with the
+ * app's ID, so Release builds upload their PDBs and sources. Apps never embed their sources: they
+ * would ship to every user.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -22,9 +25,12 @@ import type { Plan } from './recipes';
 import { findFiles } from './recipes-more';
 
 /** The Zharp packages' version the setup adds. */
-export const DOTNET_VERSION = '0.1.0';
+export const DOTNET_VERSION = '0.2.0';
 
-export type DotnetHost = 'aspnetcore' | 'worker' | 'console' | 'lambda' | 'gcf' | 'aspnet' | 'app';
+export type DotnetHost = 'aspnetcore' | 'worker' | 'console' | 'lambda' | 'gcf' | 'aspnet' | 'maui' | 'wpf' | 'winforms';
+
+/** Apps people run (MAUI, WPF, Windows Forms), rather than servers. */
+export const isDotnetApp = (host: DotnetHost) => host === 'maui' || host === 'wpf' || host === 'winforms';
 
 /** A .NET project: which file, and what it hosts. */
 export interface DotnetProject {
@@ -45,7 +51,9 @@ const read = (dir: string, path: string): string | null => {
 
 /** The host a project file targets, from its SDK, packages and references. */
 export function dotnetHostOf(csproj: string, dir: string, path: string): DotnetHost {
-  if (/<Use(Maui|WPF|WindowsForms)>\s*true/i.test(csproj)) return 'app';
+  if (/<UseMaui>\s*true/i.test(csproj)) return 'maui';
+  if (/<UseWPF>\s*true/i.test(csproj)) return 'wpf';
+  if (/<UseWindowsForms>\s*true/i.test(csproj)) return 'winforms';
   if (/Amazon\.Lambda\.(Core|AspNetCoreServer|RuntimeSupport)/.test(csproj) && !/Amazon\.Lambda\.AspNetCoreServer/.test(csproj)) return 'lambda';
   if (/Google\.Cloud\.Functions\.Hosting/.test(csproj)) return 'gcf';
   if (/Sdk="Microsoft\.NET\.Sdk\.Web"/.test(csproj)) return 'aspnetcore';
@@ -62,7 +70,9 @@ const CATALOG: Record<DotnetHost, [string, string]> = {
   lambda: ['AWS Lambda (.NET)', '.NET on AWS Lambda'],
   gcf: ['Google Cloud Functions (.NET)', '.NET on Google Cloud Functions'],
   aspnet: ['ASP.NET', 'ASP.NET (.NET Framework)'],
-  app: ['.NET', '.NET desktop/mobile app'],
+  maui: ['.NET MAUI', '.NET MAUI'],
+  wpf: ['WPF', 'WPF'],
+  winforms: ['Windows Forms', 'Windows Forms'],
 };
 
 /** The project to set up: the one with Program.cs or the web SDK first, when there are several. */
@@ -74,7 +84,7 @@ export function detectDotnet(dir: string): DotnetProject | null {
     const host = dotnetHostOf(text, dir, path);
     const hasProgram = existsSync(join(dir, dirname(path), 'Program.cs'));
     const test = /Microsoft\.NET\.Test\.Sdk|xunit|NUnit|MSTest/i.test(text);
-    const score = (test ? -10 : 0) + (host === 'aspnetcore' || host === 'lambda' || host === 'gcf' || host === 'aspnet' ? 3 : 0) + (hasProgram ? 2 : 0);
+    const score = (test ? -10 : 0) + (host === 'aspnetcore' || host === 'lambda' || host === 'gcf' || host === 'aspnet' || isDotnetApp(host) ? 3 : 0) + (hasProgram ? 2 : 0);
     return { path, host, score };
   }).sort((a, b) => b.score - a.score || a.path.split('/').length - b.path.split('/').length);
   const best = scored[0];
@@ -84,7 +94,7 @@ export function detectDotnet(dir: string): DotnetProject | null {
 
 const PACKAGE: Record<DotnetHost, string | null> = {
   aspnetcore: 'Zharp.AspNetCore', worker: 'Zharp', console: 'Zharp', lambda: 'Zharp.AwsLambda',
-  gcf: 'Zharp.GoogleCloudFunctions', aspnet: 'Zharp.AspNet', app: null,
+  gcf: 'Zharp.GoogleCloudFunctions', aspnet: 'Zharp.AspNet', maui: 'Zharp.Maui', wpf: 'Zharp.Windows', winforms: 'Zharp.Windows',
 };
 
 /** Central package management: versions in Directory.Packages.props, in this folder or above. */
@@ -222,6 +232,44 @@ export function editWebApiConfig(text: string): string | null {
   return `${text.slice(0, at)}${indent}${m[1]}.AddZharp();\n${text.slice(at)}`;
 }
 
+/** <ZharpAppId> in the project: which app Zharp.Build uploads the build's PDBs and sources to. */
+export function editAppId(text: string, appId: number): string | null {
+  if (/<ZharpAppId>/.test(text)) return null;
+  const line = `    <!-- Zharp.Build: Release builds upload their PDBs and sources here (with ZHARP_AUTH_TOKEN set). -->\n    <ZharpAppId>${appId}</ZharpAppId>`;
+  return /<PropertyGroup>\s*\n/.test(text)
+    ? text.replace(/(<PropertyGroup>\s*\n)/, `$1${line}\n`)
+    : text.replace(/(<Project[^>]*>\s*\n)/, `$1  <PropertyGroup>\n${line}\n  </PropertyGroup>\n`);
+}
+
+/** `.UseZharp(…)` after `.UseMauiApp<App>()` in MauiProgram.cs, on its own line as the template writes it. */
+export function editMauiProgram(text: string, call: string): string | null {
+  if (/\.UseZharp\(/.test(text)) return null;
+  const m = /^([ \t]*)(\S.*)?\.UseMauiApp<[\w.]+>\(\)/m.exec(text);
+  if (!m) return null;
+  const at = m.index + m[0].length;
+  // ".UseMauiApp<App>()" alone on its line keeps the chain's indent; after "builder" on one line, four more.
+  const indent = m[2] && !/^\.$/.test(m[2]) ? `${m[1]}    ` : m[1];
+  return `${text.slice(0, at)}\n${indent}${call}${text.slice(at)}`;
+}
+
+/** `ZharpApp.Start(…)` first in App.OnStartup, adding the override when the App class has none. */
+export function editWpfApp(text: string, line: string): string | null {
+  if (/ZharpApp\.Start\(/.test(text)) return null;
+  const startup = /protected\s+override\s+void\s+OnStartup\s*\(\s*StartupEventArgs\s+\w+\s*\)\s*\n?([ \t]*)\{[^\n]*\n/.exec(text);
+  if (startup) {
+    const at = startup.index + startup[0].length;
+    const indent = /^([ \t]*)\S/m.exec(text.slice(at))?.[1] ?? `${startup[1]}    `;
+    return `${text.slice(0, at)}${indent}${line}\n${text.slice(at)}`;
+  }
+  const cls = /^([ \t]*)(?:public\s+)?(?:partial\s+)?class\s+App\s*:\s*(?:System\.Windows\.)?Application\s*\n?[ \t]*\{[^\n]*\n/m.exec(text);
+  if (!cls) return null;
+  const at = cls.index + cls[0].length;
+  const i = `${cls[1]}    `;
+  const method = [`${i}protected override void OnStartup(StartupEventArgs e)`, `${i}{`, `${i}    ${line}`, `${i}    base.OnStartup(e);`, `${i}}`].join('\n');
+  const rest = text.slice(at);
+  return `${text.slice(0, at)}${method}\n${/^\s*\}/.test(rest) ? '' : '\n'}${rest}`;
+}
+
 const DEFAULT_API = 'https://api.zharp.io';
 const otlpOf = (api: string) => {
   const clean = api.replace(/\/+$/, '');
@@ -230,7 +278,8 @@ const otlpOf = (api: string) => {
 
 export function dotnet(project: Project, c: Connected, api: string): Plan | null {
   const found = detectDotnet(project.dir);
-  if (!found || found.host === 'app') return null;
+  if (!found) return null;
+  if (isDotnetApp(found.host)) return dotnetApp(project, c, api, found);
   const plan: Plan = { install: [], devInstall: [], changes: [], manual: [], notes: [], env: { file: '', vars: {} }, commands: [] };
   const key = c.application.ingestKey;
   const endpoint = otlpOf(api);
@@ -327,5 +376,57 @@ export function dotnet(project: Project, c: Connected, api: string): Plan | null
     }
   }
   if (!pdbless) plan.notes.push('Builds that can\'t embed their sources: add Zharp.Build (PrivateAssets="all") and set ZHARP_APP_ID and ZHARP_AUTH_TOKEN in CI to upload a source bundle instead.');
+  return plan;
+}
+
+/**
+ * An app (MAUI, WPF, Windows Forms): its package and Zharp.Build in the .csproj with the app's ID,
+ * and one line at startup with the key (an app's key ships inside it anyway, like a web page's).
+ */
+function dotnetApp(project: Project, c: Connected, api: string, found: DotnetProject): Plan {
+  const plan: Plan = { install: [], devInstall: [], changes: [], manual: [], notes: [], env: { file: '', vars: {} }, commands: [] };
+  const key = c.application.ingestKey;
+  const endpoint = otlpOf(api);
+  const projectDir = dirname(found.csproj) === '.' ? '' : dirname(found.csproj);
+  const at = (file: string) => (projectDir ? `${projectDir}/${file}` : file);
+  const csprojText = read(project.dir, found.csproj) ?? '';
+  const pkg = PACKAGE[found.host]!;
+
+  const central = centralPackages(project.dir, projectDir);
+  if (central) {
+    plan.commands!.push({ label: `dotnet add ${found.csproj} package ${pkg}`, argv: ['dotnet', 'add', found.csproj, 'package', pkg, '--version', DOTNET_VERSION] });
+    plan.commands!.push({ label: `dotnet add ${found.csproj} package Zharp.Build`, argv: ['dotnet', 'add', found.csproj, 'package', 'Zharp.Build', '--version', DOTNET_VERSION] });
+  }
+  let edited = central ? null : editCsproj(csprojText, pkg, false);
+  if (!central) edited = editCsproj(edited ?? csprojText, 'Zharp.Build', false, true) ?? edited;
+  edited = editAppId(edited ?? csprojText, c.application.id) ?? edited;
+  if (edited) plan.changes.push({ path: found.csproj, kind: 'edit', content: edited, note: [central ? null : `adds ${pkg} and Zharp.Build`, 'the app\'s ID for Zharp.Build'].filter(Boolean).join('; ') });
+
+  const options = endpoint ? `o => { o.Key = "${key}"; o.Endpoint = "${endpoint}"; }` : `o => o.Key = "${key}"`;
+  const start = `Zharp.ZharpApp.Start(${options});`;
+  if (found.host === 'maui') {
+    const path = at('MauiProgram.cs');
+    const text = read(project.dir, path);
+    const next = text ? editMauiProgram(text, `.UseZharp(${options})`) : null;
+    if (next) plan.changes.push({ path, kind: 'edit', content: next, note: 'UseZharp(): crashes, hangs, pages, sessions' });
+    else if (!text?.includes('UseZharp(')) plan.manual.push({ path: text ? path : 'MauiProgram.cs', why: 'start Zharp with the app', snippet: `builder.UseMauiApp<App>().UseZharp(${options});` });
+  } else if (found.host === 'wpf') {
+    const path = at('App.xaml.cs');
+    const text = read(project.dir, path);
+    const next = text ? editWpfApp(text, start) : null;
+    if (next) plan.changes.push({ path, kind: 'edit', content: next, note: 'ZharpApp.Start() first in OnStartup: crashes, hangs, windows, sessions' });
+    else if (!text?.includes('ZharpApp.Start(')) plan.manual.push({ path: text ? path : 'App.xaml.cs', why: 'start Zharp first in App.OnStartup', snippet: start });
+  } else {
+    const path = at('Program.cs');
+    const text = read(project.dir, path);
+    const next = text && !text.includes('ZharpApp.Start(') ? editProgramForConsole(text, start) : null;
+    if (next) plan.changes.push({ path, kind: 'edit', content: next, note: 'ZharpApp.Start() first in Main: crashes, hangs, forms, sessions' });
+    else if (!text?.includes('ZharpApp.Start(')) plan.manual.push({ path: text ? path : 'Program.cs', why: 'start Zharp first in Main', snippet: start });
+  }
+
+  if (/<EmbedAllSources>\s*true/i.test(csprojText)) {
+    plan.notes.push('This app embeds its sources in its PDBs (<EmbedAllSources>): they ship to everyone who installs it. Zharp doesn\'t need them there: Zharp.Build uploads them instead.');
+  }
+  plan.notes.push(`Release builds upload their PDBs and sources to Zharp (never into the app), so release stacks show your files and lines: set ZHARP_AUTH_TOKEN (a workspace API key with artifacts:write) where you build releases. Without it the build only says what it would upload.`);
   return plan;
 }
