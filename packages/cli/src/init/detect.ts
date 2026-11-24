@@ -12,9 +12,10 @@ import { detectRust } from './recipes-rust';
 import { detectElixir, type ElixirFramework } from './recipes-elixir';
 import { detectGodot } from './recipes-godot';
 import { detectUnity } from './recipes-unity';
+import { ELECTRON_FLAVORS, electronFlavor } from './recipes-electron';
 
 export type Framework =
-  | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
+  | 'expo' | 'react-native' | 'electron' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
   | 'laravel' | 'go' | 'dotnet' | 'rust' | 'godot' | 'unity' | RubyFramework | ElixirFramework | 'cloudflare-workers' | 'cloudflare-pages' | 'powershell' | 'shell' | 'unknown';
@@ -124,6 +125,12 @@ export function detect(dir: string): Project {
   const elixir = existsSync(join(dir, 'mix.exs')) ? detectElixir(dir) : null;
   if (elixir) return { ...base, ...elixir };
 
+  // Electron first: its windows are often React or Vue built with Vite, and main is Node.
+  if (deps.electron) {
+    const flavor = electronFlavor(dir, deps);
+    const label = `Electron${majorOf(deps.electron)}${flavor === 'electron' ? '' : ` (${ELECTRON_FLAVORS[flavor]})`}`;
+    return { ...base, framework: 'electron', label, catalog: 'Electron', platform: 'browser' };
+  }
   // Before React and Node: an app with react-native depends on react too.
   if (deps.expo) return { ...base, framework: 'expo', label: `Expo${majorOf(deps.expo).replace(/^ (\d+)$/, ' SDK $1')}`, catalog: 'React Native', platform: 'react-native' };
   if (deps['react-native']) return { ...base, framework: 'react-native', label: `React Native${/(\d+\.\d+)/.exec(deps['react-native'])?.[1] ? ` ${/(\d+\.\d+)/.exec(deps['react-native'])![1]}` : ''}`, catalog: 'React Native', platform: 'react-native' };

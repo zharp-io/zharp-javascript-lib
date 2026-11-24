@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import type { Project } from './detect';
 import type { Connected } from './connect';
 import { morePlanFor, type Command } from './recipes-more';
+import { electronPlanFor } from './recipes-electron';
 import { reactNativePlanFor } from './recipes-rn';
 import { powershellPlan, shellPlan } from './recipes-scripts';
 import { elixirPlanFor } from './recipes-elixir';
@@ -357,7 +358,7 @@ function basePlanFor(project: Project, c: Connected, api: string): Plan | null {
     case 'cloudflare-pages':
       return pagesPlan(project, c, api, project.wranglerConfig ?? null);
     default:
-      return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api) ?? elixirPlanFor(project, c, api);
+      return reactNativePlanFor(project, c, api) ?? electronPlanFor(project, c, api) ?? morePlanFor(project, c, api) ?? elixirPlanFor(project, c, api);
   }
 }
 

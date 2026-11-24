@@ -146,4 +146,9 @@ export interface NodeOptions {
   extraInstrumentations?: Instrumentation[];
   /** Print what the SDK and OpenTelemetry are doing. Default false. */
   debug?: boolean;
+  /**
+   * @internal Paths in error stacks rewritten before they are sent (@zharp/electron: an install's
+   * folder up to `app.asar/` becomes `app:///`), so every install groups as one.
+   */
+  rewritePaths?: (text: string) => string;
 }
