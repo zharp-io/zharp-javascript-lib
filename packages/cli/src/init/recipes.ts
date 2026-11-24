@@ -12,6 +12,7 @@ import type { Connected } from './connect';
 import { morePlanFor, type Command } from './recipes-more';
 import { reactNativePlanFor } from './recipes-rn';
 import { powershellPlan, shellPlan } from './recipes-scripts';
+import { elixirPlanFor } from './recipes-elixir';
 
 export interface Change {
   path: string;
@@ -351,7 +352,7 @@ function basePlanFor(project: Project, c: Connected, api: string): Plan | null {
     case 'shell':
       return shellPlan(project.entry ?? 'script.sh', c, api);
     default:
-      return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api);
+      return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api) ?? elixirPlanFor(project, c, api);
   }
 }
 
@@ -371,4 +372,7 @@ export const GUIDES: Record<string, string> = {
   powershell: 'https://zharp.io/docs/sdks/powershell',
   shell: 'https://zharp.io/docs/sdks/shell',
   rust: 'https://zharp.io/docs/sdks/rust',
+  phoenix: 'https://zharp.io/docs/sdks/elixir',
+  plug: 'https://zharp.io/docs/sdks/elixir',
+  elixir: 'https://zharp.io/docs/sdks/elixir',
 };
