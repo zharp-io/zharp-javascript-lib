@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <!-- Strict: nothing but the app's own files and its API. Zharp's endpoint isn't listed. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; connect-src 'self' http://127.0.0.1:8787/api/app/">
+  <title>Zharp Electron test</title>
+</head>
+<body>
+  <h1>Zharp Electron test</h1>
+  <script src="dist/renderer.js"></script>
+</body>
+</html>

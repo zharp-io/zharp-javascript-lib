@@ -10,7 +10,11 @@ import { join } from 'node:path';
 import type { Project } from './detect';
 import type { Connected } from './connect';
 import { morePlanFor, type Command } from './recipes-more';
+import { electronPlanFor } from './recipes-electron';
 import { reactNativePlanFor } from './recipes-rn';
+import { powershellPlan, shellPlan } from './recipes-scripts';
+import { elixirPlanFor } from './recipes-elixir';
+import { pagesPlan, workersPlan } from './recipes-cloudflare';
 
 export interface Change {
   path: string;
@@ -345,8 +349,16 @@ function basePlanFor(project: Project, c: Connected, api: string): Plan | null {
       return viteReact(project, c, api);
     case 'nestjs':
       return nestjs(project, c, api);
+    case 'powershell':
+      return powershellPlan(project.entry ?? 'script.ps1', c, api);
+    case 'shell':
+      return shellPlan(project.entry ?? 'script.sh', c, api);
+    case 'cloudflare-workers':
+      return workersPlan(project, c, api, project.wranglerConfig ?? 'wrangler.jsonc');
+    case 'cloudflare-pages':
+      return pagesPlan(project, c, api, project.wranglerConfig ?? null);
     default:
-      return reactNativePlanFor(project, c, api) ?? morePlanFor(project, c, api);
+      return reactNativePlanFor(project, c, api) ?? electronPlanFor(project, c, api) ?? morePlanFor(project, c, api) ?? elixirPlanFor(project, c, api);
   }
 }
 
@@ -363,4 +375,14 @@ export const GUIDES: Record<string, string> = {
   rack: 'https://zharp.io/docs/sdks/ruby',
   ruby: 'https://zharp.io/docs/sdks/ruby',
   dotnet: 'https://zharp.io/docs/sdks/dotnet',
+  powershell: 'https://zharp.io/docs/sdks/powershell',
+  shell: 'https://zharp.io/docs/sdks/shell',
+  rust: 'https://zharp.io/docs/sdks/rust',
+  phoenix: 'https://zharp.io/docs/sdks/elixir',
+  plug: 'https://zharp.io/docs/sdks/elixir',
+  elixir: 'https://zharp.io/docs/sdks/elixir',
+  godot: 'https://zharp.io/docs/sdks/godot',
+  unity: 'https://zharp.io/docs/sdks/unity',
+  'cloudflare-workers': 'https://zharp.io/docs/sdks/cloudflare',
+  'cloudflare-pages': 'https://zharp.io/docs/sdks/cloudflare',
 };

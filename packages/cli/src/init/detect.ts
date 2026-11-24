@@ -5,13 +5,20 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { detectCloudflare } from './recipes-cloudflare';
 import { detectDotnet } from './recipes-dotnet';
+import { detectScripts } from './recipes-scripts';
+import { detectRust } from './recipes-rust';
+import { detectElixir, type ElixirFramework } from './recipes-elixir';
+import { detectGodot } from './recipes-godot';
+import { detectUnity } from './recipes-unity';
+import { ELECTRON_FLAVORS, electronFlavor } from './recipes-electron';
 
 export type Framework =
-  | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
+  | 'expo' | 'react-native' | 'electron' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'dotnet' | RubyFramework | 'unknown';
+  | 'laravel' | 'go' | 'dotnet' | 'rust' | 'godot' | 'unity' | RubyFramework | ElixirFramework | 'cloudflare-workers' | 'cloudflare-pages' | 'powershell' | 'shell' | 'unknown';
 
 /** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
 export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
@@ -58,7 +65,11 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'react-native' | 'dotnet' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'rust' | 'godot' | 'unity' | 'cloudflare' | 'powershell' | 'shell' | 'otel';
+  /** PowerShell and shell: the script the setup lines go in. */
+  entry?: string;
+  /** Cloudflare: the Wrangler config (wrangler.jsonc, wrangler.toml…). */
+  wranglerConfig?: string;
   /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
   dotenv?: boolean;
   packageManager: 'pnpm' | 'yarn' | 'bun' | 'npm';
@@ -95,14 +106,42 @@ export function detect(dir: string): Project {
   const name = (typeof pkg?.name === 'string' && pkg.name.replace(/^@[^/]+\//, '')) || basename(dir);
   const base = { dir, name, packageManager: packageManagerOf(dir), typescript: !!deps.typescript || existsSync(join(dir, 'tsconfig.json')), packageJson: pkg ?? undefined };
 
+  // Godot: project.godot says so, whatever else is in the folder (a C# game has a .csproj too).
+  const game = detectGodot(dir);
+  if (game) {
+    return { ...base, name: game.name, framework: 'godot', label: `Godot${game.version ? ` ${game.version}` : ''}${game.csproj ? ' (C#)' : ''}`, catalog: 'Godot', platform: 'godot' };
+  }
+  // Unity: ProjectVersion.txt says so, whatever else is in the folder (the IDE's .csproj and .sln files).
+  const unityGame = detectUnity(dir);
+  if (unityGame) {
+    return { ...base, name: unityGame.name, framework: 'unity', label: `Unity${unityGame.version ? ` ${unityGame.version}` : ''}`, catalog: 'Unity', platform: 'unity' };
+  }
+
   // A Rails app's package.json (esbuild, Vite, React) is its front end: the app is Rails. Other
   // Gemfiles (React Native's CocoaPods one, Sinatra next to a Node tool) are looked at last.
   const gemfile = read(join(dir, 'Gemfile'));
   if (gemfile !== null && isRails(dir, gemfile)) return { ...base, ...ruby(dir, gemfile) };
+  // Elixir: mix.exs (a Phoenix app's assets keep their own package.json).
+  const elixir = existsSync(join(dir, 'mix.exs')) ? detectElixir(dir) : null;
+  if (elixir) return { ...base, ...elixir };
 
+  // Electron first: its windows are often React or Vue built with Vite, and main is Node.
+  if (deps.electron) {
+    const flavor = electronFlavor(dir, deps);
+    const label = `Electron${majorOf(deps.electron)}${flavor === 'electron' ? '' : ` (${ELECTRON_FLAVORS[flavor]})`}`;
+    return { ...base, framework: 'electron', label, catalog: 'Electron', platform: 'browser' };
+  }
   // Before React and Node: an app with react-native depends on react too.
   if (deps.expo) return { ...base, framework: 'expo', label: `Expo${majorOf(deps.expo).replace(/^ (\d+)$/, ' SDK $1')}`, catalog: 'React Native', platform: 'react-native' };
   if (deps['react-native']) return { ...base, framework: 'react-native', label: `React Native${/(\d+\.\d+)/.exec(deps['react-native'])?.[1] ? ` ${/(\d+\.\d+)/.exec(deps['react-native'])![1]}` : ''}`, catalog: 'React Native', platform: 'react-native' };
+  // A Wrangler project: a Worker (Hono and the like included) or Pages Functions. Frameworks on their
+  // own Cloudflare adapter (OpenNext, Astro…) are left to their own setup.
+  const cloudflare = detectCloudflare(dir, deps);
+  if (cloudflare) {
+    return cloudflare.pages
+      ? { ...base, framework: 'cloudflare-pages', label: 'Cloudflare Pages', catalog: 'Cloudflare Pages', platform: 'cloudflare', wranglerConfig: cloudflare.config }
+      : { ...base, framework: 'cloudflare-workers', label: deps.hono ? 'Cloudflare Workers (Hono)' : 'Cloudflare Workers', catalog: 'Cloudflare Workers', platform: 'cloudflare', wranglerConfig: cloudflare.config };
+  }
   if (deps.next) {
     const appDir = existsSync(join(dir, 'src', 'app')) ? 'src/app' : existsSync(join(dir, 'app')) ? 'app' : undefined;
     return { ...base, framework: 'nextjs', label: `Next.js${majorOf(deps.next)}`, catalog: 'Next.js', platform: 'browser', appDir };
@@ -138,7 +177,14 @@ export function detect(dir: string): Project {
   // .NET: a project file (alone or in a solution), and the host it targets.
   const net = detectDotnet(dir);
   if (net) return { ...base, name: basename(net.csproj).replace(/\.csproj$/, ''), framework: 'dotnet', label: net.label, catalog: net.catalog, platform: 'dotnet' };
+  // Rust: Cargo.toml (a crate, or a workspace's binary member) and the framework it depends on.
+  const crate = detectRust(dir);
+  if (crate) return { ...base, name: crate.name, framework: 'rust', label: crate.label, catalog: crate.catalog, platform: 'rust' };
   if (pkg) return { ...base, framework: 'node', label: 'Node.js', catalog: 'Node.js', platform: 'node' };
+  // A folder of scripts: PowerShell (*.ps1) or shell (*.sh), whichever there are more of.
+  const scripts = detectScripts(dir);
+  if (scripts?.kind === 'powershell') return { ...base, framework: 'powershell', label: `PowerShell scripts (${scripts.entry})`, catalog: 'PowerShell', platform: 'powershell', entry: scripts.entry };
+  if (scripts?.kind === 'shell') return { ...base, framework: 'shell', label: `shell scripts (${scripts.entry})`, catalog: 'CLI (Shell)', platform: 'shell', entry: scripts.entry };
   return { ...base, framework: 'unknown', label: 'an unknown project', platform: 'otel' };
 }
 

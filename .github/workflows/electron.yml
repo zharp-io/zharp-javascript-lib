@@ -1,0 +1,52 @@
+# @zharp/electron end to end on Windows and macOS: the same app and checks as test/electron/run.mjs
+# runs in Docker on Linux (two windows through main, a renderer and a main crash with their
+# minidumps, the offline queue), against the stand-in server — here on the platforms where
+# Electron's crash handling differs (electron_wer.dll on Windows, the macOS crash handler).
+name: electron
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/electron/**'
+      - 'packages/browser/src/**'
+      - 'packages/node/src/**'
+      - 'test/electron/**'
+      - '.github/workflows/electron.yml'
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        electron: ['43', '45']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: pnpm --filter @zharp/node --filter @zharp/browser --filter @zharp/cli --filter @zharp/electron build
+      - name: Pack the packages
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/packs"
+          for p in node electron cli; do (cd packages/$p && pnpm pack --pack-destination "$RUNNER_TEMP/packs"); done
+      - name: The test app, with Electron, Playwright and esbuild
+        shell: bash
+        run: |
+          cp -r test/electron/app "$RUNNER_TEMP/app"
+          cd "$RUNNER_TEMP/app"
+          npm install --no-audit --no-fund --legacy-peer-deps "$RUNNER_TEMP"/packs/*.tgz electron@${{ matrix.electron }} playwright-core@1.56.1 esbuild@0.27.7
+          node -e "console.log(require('electron'))"
+      - name: Run
+        shell: bash
+        working-directory: ${{ runner.temp }}/app
+        run: node "$GITHUB_WORKSPACE/test/electron/run.mjs"

@@ -1,12 +1,13 @@
 {
   "name": "zharp-js-sdk",
   "private": true,
-  "description": "Zharp's JavaScript SDKs: @zharp/browser and @zharp/node (and the older @zharp/logs), @zharp/cli and the bundler plugins",
+  "description": "Zharp's JavaScript SDKs: @zharp/browser, @zharp/node and @zharp/cloudflare (and the older @zharp/logs), @zharp/cli and the bundler plugins",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r build && node test/run.mjs && node test/unified.mjs && node test/readable-stacks.mjs && node test/query-errors.mjs && node test/source-context.mjs && node test/init.mjs && node test/init-style.mjs && node test/init-nest.mjs && node test/init-more.mjs && node test/source-bundle.mjs && node test/swift-names.mjs && node test/react-native.mjs && node test/init-rn.mjs",
-    "test:e2e": "node test/e2e/run.mjs"
+    "test": "pnpm -r build && node test/run.mjs && node test/unified.mjs && node test/readable-stacks.mjs && node test/query-errors.mjs && node test/source-context.mjs && node test/init.mjs && node test/init-style.mjs && node test/init-nest.mjs && node test/init-more.mjs && node test/init-dotnet.mjs && node test/init-scripts.mjs && node test/init-rust.mjs && node test/init-elixir.mjs && node test/init-godot.mjs && node test/init-unity.mjs && node test/init-cloudflare.mjs && node test/init-electron.mjs && node test/source-bundle.mjs && node test/rust-sources.mjs && node test/debug-files.mjs && node test/internal-portable.mjs && node test/swift-names.mjs && node test/react-native.mjs && pnpm --filter @zharp/cloudflare test && node test/init-rn.mjs",
+    "test:e2e": "node test/e2e/run.mjs",
+    "test:e2e:cloudflare": "node packages/cloudflare/test/e2e/run.mjs"
   },
   "devDependencies": {
     "@zharp/browser": "workspace:*",

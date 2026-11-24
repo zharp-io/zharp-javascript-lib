@@ -1,0 +1,15 @@
+// A Worker as people write one, run by test/e2e/run.mjs with `wrangler dev` (the real runtime,
+// bundled by Wrangler from the built package) and against a collector or a Zharp backend.
+{
+  "name": "zharp-e2e-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "vars": { "ZHARP_SERVICE": "e2e-worker" },
+  "d1_databases": [{ "binding": "DB", "database_name": "shop", "database_id": "00000000-0000-0000-0000-000000000001" }],
+  "kv_namespaces": [{ "binding": "KV", "id": "e2e-kv" }],
+  "durable_objects": { "bindings": [{ "name": "CART", "class_name": "Cart" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Cart"] }]
+}

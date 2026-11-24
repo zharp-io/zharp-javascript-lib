@@ -7,10 +7,12 @@ import { existsSync } from 'node:fs';
 import { resolveConnection, UploadError, type Connection } from './api';
 import { consoleLogger } from './log';
 import { uploadDartSymbols, uploadDsyms, uploadProguard } from './native';
+import { uploadDebugFiles } from './debug-files';
 import { uploadReactNative, uploadReactNativeDir } from './react-native';
 import { injectDirectory, uploadSourcemaps } from './sourcemaps';
 import { VERSION } from './version';
 import { runInit } from './init';
+import { uploadRustSources } from './rust-sources';
 
 const HELP = `zharp ${VERSION} — readable stack traces for Zharp
 
@@ -20,22 +22,33 @@ Usage:
         [--yes] [--dry-run]                             (signs in through the browser)
   zharp sourcemaps inject <dir>                         Add debug IDs to JS files and their maps
   zharp sourcemaps upload <dir> --app <id>              Upload JS files and their maps
-        [--release <r>] [--delete-after]
+        [--release <r>] [--delete-after]                (files without debug IDs, as Wrangler builds
+                                                        a Worker, are matched by --release)
   zharp proguard upload <mapping.txt> --app <id> --uuid <uuid>
   zharp dart-symbols upload <dir> --app <id>            Flutter --split-debug-info output
         [--obfuscation-map <file>]                      (and its obfuscation map)
   zharp dsym upload <path> --app <id>                   A .dSYM, or a folder of them
+  zharp debug-files upload <path...> --app <id>         C/C++ debug files for minidump crashes: PDBs,
+        [--include-sources] [--sources <dir>]           ELF files, dSYMs (made into .sym with dump_syms)
+        [--dump-syms <path>]                            or .sym files
   zharp react-native upload --bundle <file> --map <file> --app <id>
                                                         A React Native release bundle's source map
   zharp react-native upload --dir dist --app <id>       Every bundle an \`npx expo export\` wrote (EAS Update)
+  zharp sources upload [dir] --app <id>                 A Rust crate's src/ as a source bundle, under the
+        [--build-id <id>] [--release <r>]               build ID zharp::build::id() puts in the binary
+                                                        (dir: default the nearest folder with Cargo.toml)
 
 Options:
   --app <id>          Application ID (or ZHARP_APP)
   --release <r>       Release name to file the upload under (or ZHARP_RELEASE)
   --include <glob>    Only these files (repeatable; sourcemaps)
   --exclude <glob>    Not these files (repeatable; sourcemaps)
-  --sources <dir>     The project whose sources go with the symbols (dart-symbols, dsym; default: found)
+  --sources <dir>     The project whose sources go with the symbols (dart-symbols, dsym; default: found;
+                      debug-files: where the sources are now, when built elsewhere)
+  --include-sources   Also upload the source files the symbols name (debug-files)
+  --dump-syms <path>  Mozilla dump_syms to use (or ZHARP_DUMP_SYMS; default: PATH, else downloaded once)
   --no-sources        Don't upload the app's sources (errors then show code only from a linked repo)
+  --build-id <id>     sources upload: this build ID instead of the one computed from src/**/*.rs
   --delete-after      Delete .map files after uploading them
   --dry-run           Show what would happen; change and send nothing
   --url <url>         Zharp API (default ZHARP_URL or https://api.zharp.io)
@@ -44,6 +57,7 @@ Options:
 Environment:
   ZHARP_AUTH_TOKEN    A workspace API key with the "artifacts:write" scope (required to upload)
   ZHARP_URL           The Zharp API, default https://api.zharp.io
+  ZHARP_DUMP_SYMS     dump_syms to use for debug-files upload
 `;
 
 class UsageError extends Error {}
@@ -60,12 +74,15 @@ async function main(argv: string[]): Promise<void> {
       app: { type: 'string' },
       release: { type: 'string' },
       uuid: { type: 'string' },
+      'build-id': { type: 'string' },
       'obfuscation-map': { type: 'string' },
       sources: { type: 'string' },
       bundle: { type: 'string' },
       dir: { type: 'string' },
       map: { type: 'string' },
       'no-sources': { type: 'boolean' },
+      'include-sources': { type: 'boolean' },
+      'dump-syms': { type: 'string' },
       include: { type: 'string', multiple: true },
       exclude: { type: 'string', multiple: true },
       'delete-after': { type: 'boolean' },
@@ -143,9 +160,29 @@ async function main(argv: string[]): Promise<void> {
       await uploadReactNative(values.bundle!, values.map!, connect(), { release, dryRun, logger });
       return;
     }
+    case 'debug-files upload': {
+      const paths = positionals.slice(2);
+      if (!paths.length) fail('debug-files upload needs a build folder or debug files. See `zharp --help`.');
+      for (const path of paths) if (!existsSync(path)) fail(`${path} does not exist.`);
+      if (values.sources && !existsSync(values.sources)) fail(`${values.sources} does not exist.`);
+      await uploadDebugFiles(paths, connect(), {
+        release,
+        dryRun,
+        logger,
+        includeSources: values['include-sources'] === true || !!values.sources,
+        sourcesRoot: values.sources,
+        dumpSyms: values['dump-syms'],
+      });
+      return;
+    }
     case 'dsym upload': {
       const sources = values['no-sources'] ? false : values.sources;
       await uploadDsyms(needTarget('a .dSYM bundle or a folder of them'), connect(), { release, dryRun, logger, sources });
+      return;
+    }
+    case 'sources upload': {
+      if (values['build-id'] !== undefined && !values['build-id'].trim()) fail('--build-id needs a value.');
+      await uploadRustSources(target, connect(), { release, dryRun, logger, buildId: values['build-id']?.trim() });
       return;
     }
     default:

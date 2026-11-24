@@ -1,0 +1,95 @@
+{
+  "name": "@zharp/electron",
+  "version": "0.1.0",
+  "description": "Zharp Application Monitoring for Electron — errors, crashes, logs, traces and sessions from the main process and every window",
+  "exports": {
+    "./main": {
+      "import": {
+        "types": "./dist/main.d.mts",
+        "default": "./dist/main.mjs"
+      },
+      "require": {
+        "types": "./dist/main.d.ts",
+        "default": "./dist/main.js"
+      }
+    },
+    "./preload": {
+      "types": "./dist/preload.d.ts",
+      "default": "./dist/preload.js"
+    },
+    "./renderer": {
+      "import": {
+        "types": "./dist/renderer.d.mts",
+        "default": "./dist/renderer.mjs"
+      },
+      "require": {
+        "types": "./dist/renderer.d.ts",
+        "default": "./dist/renderer.js"
+      }
+    },
+    "./dist/renderer.min.js": "./dist/renderer.min.js",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "main": [
+        "./dist/main.d.ts"
+      ],
+      "preload": [
+        "./dist/preload.d.ts"
+      ],
+      "renderer": [
+        "./dist/renderer.d.ts"
+      ]
+    }
+  },
+  "sideEffects": [
+    "./dist/preload.js"
+  ],
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build && pnpm run typecheck"
+  },
+  "keywords": [
+    "zharp",
+    "electron",
+    "apm",
+    "crash-reporting",
+    "error-tracking",
+    "minidump",
+    "tracing",
+    "logging",
+    "opentelemetry",
+    "monitoring",
+    "observability"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zharp-io/zharp-javascript-lib.git",
+    "directory": "packages/electron"
+  },
+  "homepage": "https://zharp.io/docs/sdks/electron",
+  "bugs": "https://github.com/zharp-io/zharp-javascript-lib/issues",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@zharp/node": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@zharp/internal": "workspace:*",
+    "electron": "^45.4.1",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "electron": ">=43"
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "@zharp/cli",
-  "version": "0.5.0",
-  "description": "Zharp's command line: upload source maps, ProGuard mappings, Dart symbols and dSYMs for readable stack traces",
+  "version": "0.6.0",
+  "description": "Zharp's command line: upload source maps, ProGuard mappings, Dart symbols, dSYMs and native debug files for readable stack traces",
   "bin": {
     "zharp": "dist/cli.js"
   },

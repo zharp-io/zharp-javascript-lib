@@ -48,7 +48,7 @@ function withSources(kind: 'flutter' | 'apple', buildIds: string[], options: Nat
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function send(connection: Connection | null, artifacts: Artifact[], options: NativeUploadOptions): Promise<Artifact[]> {
+export async function send(connection: Connection | null, artifacts: Artifact[], options: NativeUploadOptions): Promise<Artifact[]> {
   const logger = options.logger ?? consoleLogger();
   let done = 0;
   await eachLimit(artifacts, 2, async (artifact) => {
