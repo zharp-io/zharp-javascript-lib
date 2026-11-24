@@ -248,6 +248,151 @@ function laravel(project: Project, c: Connected, api: string): Plan {
   return plan;
 }
 
+const composerRequire: Command = { label: 'composer require zharp/zharp', argv: ['composer', 'require', 'zharp/zharp'] };
+
+/** config/bundles.php with ZharpBundle added last, in the array it returns. */
+export function editBundles(text: string): string | null {
+  if (/ZharpBundle/.test(text)) return null;
+  const end = /^\];\s*$/m.exec(text);
+  if (!end || !/return\s*\[/.test(text)) return null;
+  return `${text.slice(0, end.index)}    Zharp\\Symfony\\ZharpBundle::class => ['all' => true],\n${text.slice(end.index)}`;
+}
+
+/** Symfony: the key in .env.local (Symfony commits .env), the bundle in config/bundles.php. */
+function symfony(project: Project, c: Connected, api: string): Plan {
+  const plan = emptyPlan('.env.local');
+  plan.commands = [composerRequire];
+  const endpoint = otlpOf(api);
+  plan.env.vars = { ZHARP_KEY: c.application.ingestKey, ZHARP_SERVICE: c.application.serviceName, ...(endpoint ? { ZHARP_ENDPOINT: endpoint } : {}) };
+  const bundles = read(project.dir, 'config/bundles.php');
+  const edited = bundles !== null ? editBundles(bundles) : null;
+  if (edited) {
+    plan.changes.push({ path: 'config/bundles.php', kind: 'edit', content: edited, note: 'enables ZharpBundle' });
+  } else if (!bundles || !/ZharpBundle/.test(bundles)) {
+    plan.manual.push({ path: 'config/bundles.php', why: 'enable the bundle', snippet: `Zharp\\Symfony\\ZharpBundle::class => ['all' => true],` });
+  }
+  plan.notes.push('Set ZHARP_KEY in production too (the server\'s environment, or .env.local there).');
+  return plan;
+}
+
+/** The PHP files a plain PHP app is entered through, most likely first. */
+const PHP_ENTRIES = ['public/index.php', 'index.php', 'web/index.php', 'htdocs/index.php', 'bootstrap.php', 'src/bootstrap.php'];
+
+/** An entry point with Zharp started right after Composer's autoloader is required. */
+export function editPhpEntry(text: string, c: Connected, api: string): string | null {
+  if (/Zharp\\Zharp::init|Zharp::init\(/.test(text)) return null;
+  const autoload = /^[ \t]*require(?:_once)?\s*\(?[^;\n]*vendor\/autoload\.php['"]\)?\s*;[^\n]*$/m.exec(text);
+  if (!autoload) return null;
+  const endpoint = otlpOf(api);
+  const block = [
+    '',
+    "// The app's key can only send data to this app, so it is safe in code.",
+    'Zharp\\Zharp::init([',
+    `    'key' => '${c.application.ingestKey}',`,
+    `    'service' => '${c.application.serviceName}',`,
+    ...(endpoint ? [`    'endpoint' => '${endpoint}',`] : []),
+    ']);',
+  ].join('\n');
+  const at = autoload.index + autoload[0].length;
+  return `${text.slice(0, at)}\n${block}${text.slice(at)}`;
+}
+
+/** Plain PHP: Zharp started in the entry point, after the autoloader. */
+function plainPhp(project: Project, c: Connected, api: string): Plan {
+  const plan = emptyPlan(null);
+  plan.commands = [composerRequire];
+  const endpoint = otlpOf(api);
+  const entry = PHP_ENTRIES.find((path) => {
+    const text = read(project.dir, path);
+    return text !== null && /vendor\/autoload\.php/.test(text);
+  });
+  const text = entry ? read(project.dir, entry) : null;
+  const edited = text !== null ? editPhpEntry(text, c, api) : null;
+  if (entry && edited) {
+    plan.changes.push({ path: entry, kind: 'edit', content: edited, note: 'starts Zharp (each request traced, uncaught errors reported)' });
+  } else if (!text || !/Zharp::init/.test(text)) {
+    plan.manual.push({
+      path: entry ?? 'each entry point (index.php)',
+      why: "start Zharp right after Composer's autoloader",
+      snippet: `require __DIR__ . '/vendor/autoload.php';\n\nZharp\\Zharp::init(['key' => '${c.application.ingestKey}', 'service' => '${c.application.serviceName}'${endpoint ? `, 'endpoint' => '${endpoint}'` : ''}]);`,
+    });
+  }
+  plan.notes.push("Every other entry point (another page, a cron script) needs the same Zharp\\Zharp::init([...]) after its autoloader. With a router, Zharp\\Zharp::setRoute('/orders/{id}') names each request by its route.");
+  return plan;
+}
+
+// ── Dart ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * A Dart entry file with main run inside ZharpCore.run and Zharp started first — when main is the
+ * file's last function, as `dart create` writes it — and, for shelf, the middleware put first in
+ * the Pipeline.
+ */
+export function editDartMain(text: string, c: Connected, api: string, shelf: boolean): string | null {
+  if (/package:zharp_core\//.test(text)) return null;
+  const main = /^(Future<void>|void)\s+main\(([^)]*)\)(\s+async)?\s*\{\n([\s\S]*?)^\}\s*$(?![\s\S])/m.exec(text);
+  if (!main) return null;
+  const endpoint = otlpOf(api);
+  const start = [
+    "  // The app's key can only send data to this app, so it is safe in code.",
+    '  ZharpCore.start(ZharpOptions(',
+    `    key: '${c.application.ingestKey}',`,
+    `    service: '${c.application.serviceName}',`,
+    ...(endpoint ? [`    endpoint: '${endpoint}',`] : []),
+    '  ));',
+  ].join('\n');
+  let body = main[4].replace(/\n$/, '');
+  if (shelf) {
+    if (!/\.addMiddleware\(logRequests\(\)\)/.test(body)) return null;
+    body = body.replace(/\.addMiddleware\(logRequests\(\)\)/, '.addMiddleware(zharpMiddleware()) // first, so it sees everything\n      .addMiddleware(logRequests())');
+  } else {
+    // A tool ends when main returns: send what's waiting first.
+    body = `${body}\n  await ZharpCore.instance?.close();`;
+  }
+  const wrapped = `void main(${main[2]}) => ZharpCore.run(() async {\n${start}\n${body}\n});\n`;
+  const imports = ["import 'package:zharp_core/zharp_core.dart';", ...(shelf ? ["import 'package:zharp_shelf/zharp_shelf.dart';"] : [])].join('\n');
+  const head = text.slice(0, main.index);
+  const lastImport = [...head.matchAll(/^import\s.*;[ \t]*$/gm)].at(-1);
+  const withImports = lastImport
+    ? `${head.slice(0, lastImport.index! + lastImport[0].length)}\n${imports}${head.slice(lastImport.index! + lastImport[0].length)}`
+    : `${imports}\n\n${head}`;
+  return `${withImports}${wrapped}`;
+}
+
+/** Dart without Flutter: zharp_core (and zharp_shelf on shelf or dart_frog), main run inside Zharp. */
+function dart(project: Project, c: Connected, api: string): Plan {
+  const plan = emptyPlan(null);
+  const shelf = project.dartServer === 'shelf';
+  const packages = ['zharp_core', ...(project.dartServer ? ['zharp_shelf'] : [])];
+  plan.commands = [{ label: `dart pub add ${packages.join(' ')}`, argv: ['dart', 'pub', 'add', ...packages] }];
+  const endpoint = otlpOf(api);
+  const options = `ZharpOptions(key: '${c.application.ingestKey}', service: '${c.application.serviceName}'${endpoint ? `, endpoint: '${endpoint}'` : ''})`;
+  if (project.dartServer === 'dart_frog') {
+    plan.manual.push(
+      { path: 'routes/_middleware.dart', why: 'trace each request', snippet: `import 'package:zharp_shelf/zharp_shelf.dart';\n\nHandler middleware(Handler handler) => handler.use(fromShelfMiddleware(zharpMiddleware()));` },
+      { path: 'main.dart', why: 'start Zharp before serve, in a custom entrypoint', snippet: `Future<HttpServer> run(Handler handler, InternetAddress ip, int port) {\n  ZharpCore.start(${options});\n  return serve(handler, ip, port);\n}` },
+    );
+    return plan;
+  }
+  const name = project.name;
+  const entry = (shelf ? ['bin/server.dart', `bin/${name}.dart`] : [`bin/${name}.dart`, 'bin/main.dart', 'bin/server.dart']).find((path) => read(project.dir, path) !== null);
+  const text = entry ? read(project.dir, entry) : null;
+  const edited = text !== null ? editDartMain(text, c, api, shelf) : null;
+  if (entry && edited) {
+    plan.changes.push({ path: entry, kind: 'edit', content: edited, note: shelf ? 'runs main inside Zharp, middleware first' : 'runs main inside Zharp' });
+  } else if (!text || !/package:zharp_core\//.test(text)) {
+    plan.manual.push({
+      path: entry ?? `bin/${name}.dart`,
+      why: shelf ? 'run main inside Zharp, with the middleware first' : 'run main inside Zharp',
+      snippet: shelf
+        ? `void main() => ZharpCore.run(() async {\n  ZharpCore.start(${options});\n  final handler = Pipeline().addMiddleware(zharpMiddleware()).addHandler(router.call);\n  await serve(handler, InternetAddress.anyIPv4, 8080);\n});`
+        : `void main(List<String> args) => ZharpCore.run(() async {\n  ZharpCore.start(${options});\n  // …\n  await ZharpCore.instance?.close();\n});`,
+    });
+  }
+  if (shelf) plan.notes.push("Name each request by its route: setRequestRoute('/orders/<id>') in the handler.");
+  return plan;
+}
+
 // ── Go ───────────────────────────────────────────────────────────────────────────
 
 const GO_MODULE = 'github.com/zharp-io/zharp-go-lib';
@@ -451,6 +596,12 @@ export function morePlanFor(project: Project, c: Connected, api: string): Plan |
       return python(project, c, api);
     case 'laravel':
       return laravel(project, c, api);
+    case 'symfony':
+      return symfony(project, c, api);
+    case 'php':
+      return plainPhp(project, c, api);
+    case 'dart':
+      return dart(project, c, api);
     case 'go':
       return go(project, c, api);
     case 'rails':
