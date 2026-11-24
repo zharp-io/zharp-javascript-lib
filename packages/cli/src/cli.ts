@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { resolveConnection, UploadError, type Connection } from './api';
 import { consoleLogger } from './log';
 import { uploadDartSymbols, uploadDsyms, uploadProguard } from './native';
+import { uploadDebugFiles } from './debug-files';
 import { uploadReactNative, uploadReactNativeDir } from './react-native';
 import { injectDirectory, uploadSourcemaps } from './sourcemaps';
 import { VERSION } from './version';
@@ -25,6 +26,9 @@ Usage:
   zharp dart-symbols upload <dir> --app <id>            Flutter --split-debug-info output
         [--obfuscation-map <file>]                      (and its obfuscation map)
   zharp dsym upload <path> --app <id>                   A .dSYM, or a folder of them
+  zharp debug-files upload <path...> --app <id>         C/C++ debug files for minidump crashes: PDBs,
+        [--include-sources] [--sources <dir>]           ELF files, dSYMs (made into .sym with dump_syms)
+        [--dump-syms <path>]                            or .sym files
   zharp react-native upload --bundle <file> --map <file> --app <id>
                                                         A React Native release bundle's source map
   zharp react-native upload --dir dist --app <id>       Every bundle an \`npx expo export\` wrote (EAS Update)
@@ -34,7 +38,10 @@ Options:
   --release <r>       Release name to file the upload under (or ZHARP_RELEASE)
   --include <glob>    Only these files (repeatable; sourcemaps)
   --exclude <glob>    Not these files (repeatable; sourcemaps)
-  --sources <dir>     The project whose sources go with the symbols (dart-symbols, dsym; default: found)
+  --sources <dir>     The project whose sources go with the symbols (dart-symbols, dsym; default: found;
+                      debug-files: where the sources are now, when built elsewhere)
+  --include-sources   Also upload the source files the symbols name (debug-files)
+  --dump-syms <path>  Mozilla dump_syms to use (or ZHARP_DUMP_SYMS; default: PATH, else downloaded once)
   --no-sources        Don't upload the app's sources (errors then show code only from a linked repo)
   --delete-after      Delete .map files after uploading them
   --dry-run           Show what would happen; change and send nothing
@@ -44,6 +51,7 @@ Options:
 Environment:
   ZHARP_AUTH_TOKEN    A workspace API key with the "artifacts:write" scope (required to upload)
   ZHARP_URL           The Zharp API, default https://api.zharp.io
+  ZHARP_DUMP_SYMS     dump_syms to use for debug-files upload
 `;
 
 class UsageError extends Error {}
@@ -66,6 +74,8 @@ async function main(argv: string[]): Promise<void> {
       dir: { type: 'string' },
       map: { type: 'string' },
       'no-sources': { type: 'boolean' },
+      'include-sources': { type: 'boolean' },
+      'dump-syms': { type: 'string' },
       include: { type: 'string', multiple: true },
       exclude: { type: 'string', multiple: true },
       'delete-after': { type: 'boolean' },
@@ -141,6 +151,21 @@ async function main(argv: string[]): Promise<void> {
       if (!values.bundle || !values.map) fail('react-native upload needs --bundle <index.android.bundle | main.jsbundle> and --map <its source map>, or --dir <expo export output>.');
       for (const file of [values.bundle!, values.map!]) if (!existsSync(file)) fail(`${file} does not exist.`);
       await uploadReactNative(values.bundle!, values.map!, connect(), { release, dryRun, logger });
+      return;
+    }
+    case 'debug-files upload': {
+      const paths = positionals.slice(2);
+      if (!paths.length) fail('debug-files upload needs a build folder or debug files. See `zharp --help`.');
+      for (const path of paths) if (!existsSync(path)) fail(`${path} does not exist.`);
+      if (values.sources && !existsSync(values.sources)) fail(`${values.sources} does not exist.`);
+      await uploadDebugFiles(paths, connect(), {
+        release,
+        dryRun,
+        logger,
+        includeSources: values['include-sources'] === true || !!values.sources,
+        sourcesRoot: values.sources,
+        dumpSyms: values['dump-syms'],
+      });
       return;
     }
     case 'dsym upload': {
