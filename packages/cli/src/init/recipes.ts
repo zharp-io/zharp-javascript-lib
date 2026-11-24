@@ -370,4 +370,5 @@ export const GUIDES: Record<string, string> = {
   dotnet: 'https://zharp.io/docs/sdks/dotnet',
   powershell: 'https://zharp.io/docs/sdks/powershell',
   shell: 'https://zharp.io/docs/sdks/shell',
+  rust: 'https://zharp.io/docs/sdks/rust',
 };

@@ -22,5 +22,6 @@ export {
 } from './sourcemaps';
 export { collectSymSources, collectSyms, findDebugFiles, isEmptyDebugId, parseModuleLine, stripExtendedPathPrefix, stripSymPathPrefixes, uploadDebugFiles, type DebugFilesUploadOptions, type SymFile, type SymModule } from './debug-files';
 export { DUMP_SYMS_VERSION, findDumpSyms } from './dump-syms';
+export { rustBuildId, rustCrateRoot, rustSourceFiles, uploadRustSources, type RustSourcesOptions } from './rust-sources';
 export { VERSION } from './version';
 export { defaultRelease, pluginLogger, processBuildOutput, type ProcessBuildResult, type ZharpPluginOptions } from './build';

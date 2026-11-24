@@ -7,12 +7,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { detectDotnet } from './recipes-dotnet';
 import { detectScripts } from './recipes-scripts';
+import { detectRust } from './recipes-rust';
 
 export type Framework =
   | 'expo' | 'react-native' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'dotnet' | RubyFramework | 'powershell' | 'shell' | 'unknown';
+  | 'laravel' | 'go' | 'dotnet' | 'rust' | RubyFramework | 'powershell' | 'shell' | 'unknown';
 
 /** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
 export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
@@ -59,7 +60,7 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'react-native' | 'dotnet' | 'powershell' | 'shell' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'react-native' | 'dotnet' | 'rust' | 'powershell' | 'shell' | 'otel';
   /** PowerShell and shell: the script the setup lines go in. */
   entry?: string;
   /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
@@ -141,6 +142,9 @@ export function detect(dir: string): Project {
   // .NET: a project file (alone or in a solution), and the host it targets.
   const net = detectDotnet(dir);
   if (net) return { ...base, name: basename(net.csproj).replace(/\.csproj$/, ''), framework: 'dotnet', label: net.label, catalog: net.catalog, platform: 'dotnet' };
+  // Rust: Cargo.toml (a crate, or a workspace's binary member) and the framework it depends on.
+  const crate = detectRust(dir);
+  if (crate) return { ...base, name: crate.name, framework: 'rust', label: crate.label, catalog: crate.catalog, platform: 'rust' };
   if (pkg) return { ...base, framework: 'node', label: 'Node.js', catalog: 'Node.js', platform: 'node' };
   // A folder of scripts: PowerShell (*.ps1) or shell (*.sh), whichever there are more of.
   const scripts = detectScripts(dir);

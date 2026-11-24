@@ -88,6 +88,16 @@ npx zharp debug-files upload build/ --app 42 --include-sources
 - `--include-sources` also sends the app's source files the symbols name (not system or SDK headers), so crashes show the code of this build. When the build ran in another place (a container, a CI runner), `--sources <dir>` is where the same paths are found now.
 - dump_syms: `--dump-syms <path>` or `ZHARP_DUMP_SYMS` if you have one, else `dump_syms` on your PATH, else Mozilla's release 2.3.9 is downloaded once into your cache folder (`ZHARP_CACHE_DIR` to move it) and checked against the SHA-256 pinned in the CLI before it runs. Unpacking uses the system's `tar` (on Linux it needs `xz`). Windows on Arm runs the x64 build.
 
+## Rust
+
+With `zharp::build::id()` in the crate's `build.rs` (`zharp` in `[build-dependencies]` with `default-features = false`), upload the crate's code from CI so errors show the code that ran, without a linked repository:
+
+```bash
+npx @zharp/cli sources upload --app 42            # in the crate's folder, or: sources upload crates/api --app 42
+```
+
+The crate's `src/**/*.rs` files are uploaded as a source bundle under the build ID `build.rs` puts in the binary: a hash of those same files (their paths and bytes), computed the same way here, so nothing has to be passed between the build and the upload. It prints the build ID it used; `--build-id <id>` uploads under another one.
+
 ## Behaviour
 
 - Native symbol files are uploaded gzipped.
