@@ -273,5 +273,116 @@ await test("Plain Ruby: bundle add and the init snippet; Ruby tile. React Native
   assert.equal(rn.framework, 'react-native');
 });
 
+await test('Plain PHP: composer require, Zharp started after the autoloader in public/index.php; PHP tile', () => {
+  const index = ['<?php', '', "require __DIR__ . '/../vendor/autoload.php';", '', "echo 'hello';", ''].join(NL);
+  const p = project('plain-php', { 'composer.json': JSON.stringify({ require: { 'monolog/monolog': '^3.0' } }), 'public/index.php': index });
+  assert.equal(p.framework, 'php');
+  assert.equal(p.catalog, 'PHP');
+  assert.equal(p.platform, 'php');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['composer require zharp/zharp']);
+  const out = change(plan, 'public/index.php').content;
+  assert.ok(out.includes("require __DIR__ . '/../vendor/autoload.php';" + NL + NL + "// The app's key"), out);
+  assert.ok(out.includes("Zharp\\Zharp::init([" + NL + "    'key' => 'zpk_abc'," + NL + "    'service' => 'shop'," + NL + ']);' + NL + NL + "echo 'hello';"), out);
+  // Run again: already started, nothing to change.
+  assert.equal(more.editPhpEntry(out, c, API), null);
+  // A local Zharp: the endpoint goes in too.
+  assert.match(more.editPhpEntry(index, c, 'http://localhost:4000'), /'endpoint' => 'http:\/\/localhost:4000\/api\/v1\/otlp',/);
+});
+
+await test('Plain PHP without an entry point that requires the autoloader: the snippet to paste', () => {
+  const p = project('plain-php-bare', { 'composer.json': '{}', 'index.php': '<?php echo 1;' + NL });
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.changes, []);
+  assert.match(plan.manual[0].snippet, /Zharp\\Zharp::init\(\['key' => 'zpk_abc', 'service' => 'shop'\]\);/);
+});
+
+await test('Symfony: composer require, the key in .env.local, ZharpBundle enabled in config/bundles.php', () => {
+  const bundles = ['<?php', '', 'return [', "    Symfony\\Bundle\\FrameworkBundle\\FrameworkBundle::class => ['all' => true],", '];', ''].join(NL);
+  const p = project('symfony-app', { 'composer.json': JSON.stringify({ require: { 'symfony/framework-bundle': '7.3.*' } }), 'config/bundles.php': bundles });
+  assert.equal(p.framework, 'symfony');
+  assert.equal(p.catalog, 'Symfony');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.env, { file: '.env.local', vars: { ZHARP_KEY: 'zpk_abc', ZHARP_SERVICE: 'shop' } });
+  const out = change(plan, 'config/bundles.php').content;
+  assert.ok(out.endsWith("FrameworkBundle::class => ['all' => true]," + NL + "    Zharp\\Symfony\\ZharpBundle::class => ['all' => true]," + NL + '];' + NL), out);
+  assert.equal(more.editBundles(out), null);
+});
+
+// What `dart create -t server-shelf` writes (Dart 3.x).
+const SHELF_SERVER = [
+  "import 'dart:io';",
+  '',
+  "import 'package:shelf/shelf.dart';",
+  "import 'package:shelf/shelf_io.dart';",
+  "import 'package:shelf_router/shelf_router.dart';",
+  '',
+  '// Configure routes.',
+  'final _router = Router()',
+  "  ..get('/', _rootHandler);",
+  '',
+  'Response _rootHandler(Request req) {',
+  "  return Response.ok('Hello, World!\\n');",
+  '}',
+  '',
+  'void main(List<String> args) async {',
+  '  // Use any available host or container IP (usually `0.0.0.0`).',
+  '  final ip = InternetAddress.anyIPv4;',
+  '',
+  '  // Configure a pipeline that logs requests.',
+  '  final handler = Pipeline()',
+  '      .addMiddleware(logRequests())',
+  '      .addHandler(_router.call);',
+  '',
+  "  final port = int.parse(Platform.environment['PORT'] ?? '8080');",
+  '  final server = await serve(handler, ip, port);',
+  "  print('Server listening on port ${server.port}');",
+  '}',
+  '',
+].join(NL);
+
+await test('Dart shelf server: dart pub add, main run inside Zharp, the middleware first; the server tile', () => {
+  const p = project('shop_api_dir', {
+    'pubspec.yaml': ['name: shop_api', 'environment:', '  sdk: ^3.9.0', 'dependencies:', '  shelf: ^1.4.2', '  shelf_router: ^1.1.2', ''].join(NL),
+    'bin/server.dart': SHELF_SERVER,
+  });
+  assert.equal(p.framework, 'dart');
+  assert.equal(p.platform, 'dart');
+  assert.equal(p.name, 'shop_api');
+  assert.equal(p.label, 'Dart (shelf)');
+  assert.equal(p.catalog, 'Dart (server)');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['dart pub add zharp_core zharp_shelf']);
+  const out = change(plan, 'bin/server.dart').content;
+  assert.ok(out.includes("import 'package:shelf_router/shelf_router.dart';" + NL + "import 'package:zharp_core/zharp_core.dart';" + NL + "import 'package:zharp_shelf/zharp_shelf.dart';" + NL), out);
+  assert.ok(out.includes('void main(List<String> args) => ZharpCore.run(() async {' + NL + "  // The app's key"), out);
+  assert.ok(out.includes("    key: 'zpk_abc'," + NL + "    service: 'shop'," + NL + '  ));' + NL + '  // Use any available host'), out);
+  assert.ok(out.includes('  final handler = Pipeline()' + NL + '      .addMiddleware(zharpMiddleware()) // first, so it sees everything' + NL + '      .addMiddleware(logRequests())'), out);
+  assert.ok(out.endsWith("  print('Server listening on port ${server.port}');" + NL + '});' + NL), out);
+  assert.equal(more.editDartMain(out, c, API, true), null);
+});
+
+await test('Dart console tool: main run inside Zharp, closed before it ends; the plain Dart tile. A Flutter app is not a Dart tool', () => {
+  const main = ["import 'package:import_tool/import_tool.dart' as import_tool;", '', 'void main(List<String> arguments) {', "  print('Hello world: ${import_tool.calculate()}!');", '}', ''].join(NL);
+  const p = project('import_tool', { 'pubspec.yaml': ['name: import_tool', 'environment:', '  sdk: ^3.9.0', ''].join(NL), 'bin/import_tool.dart': main });
+  assert.equal(p.catalog, 'Dart (desktop)');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['dart pub add zharp_core']);
+  const out = change(plan, 'bin/import_tool.dart').content;
+  assert.ok(out.includes('void main(List<String> arguments) => ZharpCore.run(() async {'), out);
+  assert.ok(out.endsWith("  print('Hello world: ${import_tool.calculate()}!');" + NL + '  await ZharpCore.instance?.close();' + NL + '});' + NL), out);
+  const flutter = project('flutter_app', { 'pubspec.yaml': ['name: flutter_app', 'dependencies:', '  flutter:', '    sdk: flutter', ''].join(NL) });
+  assert.notEqual(flutter.framework, 'dart');
+});
+
+await test('dart_frog: zharp_shelf through fromShelfMiddleware, as snippets', () => {
+  const p = project('frog', { 'pubspec.yaml': ['name: frog', 'dependencies:', '  dart_frog: ^1.1.0', ''].join(NL) });
+  assert.equal(p.label, 'Dart (dart_frog)');
+  const plan = planFor(p, c, API);
+  assert.deepEqual(plan.commands.map((x) => x.argv.join(' ')), ['dart pub add zharp_core zharp_shelf']);
+  assert.match(plan.manual[0].snippet, /fromShelfMiddleware\(zharpMiddleware\(\)\)/);
+  assert.match(plan.manual[1].snippet, /ZharpCore\.start\(ZharpOptions\(key: 'zpk_abc', service: 'shop'\)\)/);
+});
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${passed} passed`);

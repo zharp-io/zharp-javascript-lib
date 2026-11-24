@@ -18,7 +18,7 @@ export type Framework =
   | 'expo' | 'react-native' | 'electron' | 'nextjs' | 'vite-react' | 'nestjs'
   | 'express' | 'koa' | 'hapi' | 'fastify' | 'connect' | 'node'
   | 'django' | 'fastapi' | 'flask' | PythonFramework
-  | 'laravel' | 'go' | 'dotnet' | 'rust' | 'godot' | 'unity' | RubyFramework | ElixirFramework | 'cloudflare-workers' | 'cloudflare-pages' | 'powershell' | 'shell' | 'unknown';
+  | 'laravel' | 'symfony' | 'php' | 'go' | 'dotnet' | 'rust' | 'godot' | 'unity' | RubyFramework | ElixirFramework | 'dart' | 'cloudflare-workers' | 'cloudflare-pages' | 'powershell' | 'shell' | 'unknown';
 
 /** Ruby projects, from the Gemfile: Rails, the Rack frameworks (one use line in config.ru), plain Ruby. */
 export type RubyFramework = 'rails' | 'sinatra' | 'hanami' | 'roda' | 'grape' | 'rack' | 'ruby';
@@ -65,11 +65,13 @@ export interface Project {
   /** Go: the router go.mod requires, when it has its own setup. */
   goRouter?: GoRouter;
   /** The Zharp platform the app is created with. */
-  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'rust' | 'godot' | 'unity' | 'cloudflare' | 'powershell' | 'shell' | 'otel';
+  platform: 'browser' | 'node' | 'python' | 'php' | 'go' | 'ruby' | 'elixir' | 'react-native' | 'dotnet' | 'dart' | 'rust' | 'godot' | 'unity' | 'cloudflare' | 'powershell' | 'shell' | 'otel';
   /** PowerShell and shell: the script the setup lines go in. */
   entry?: string;
   /** Cloudflare: the Wrangler config (wrangler.jsonc, wrangler.toml…). */
   wranglerConfig?: string;
+  /** Dart: the server framework pubspec.yaml depends on (shelf, dart_frog), when there is one. */
+  dartServer?: 'shelf' | 'dart_frog';
   /** Ruby: the Gemfile has dotenv (dotenv-rails), so the key can go in .env. */
   dotenv?: boolean;
   packageManager: 'pnpm' | 'yarn' | 'bun' | 'npm';
@@ -166,6 +168,8 @@ export function detect(dir: string): Project {
   }
   const composer = read(join(dir, 'composer.json'));
   if (composer && /laravel\/framework/.test(composer)) return { ...base, name: basename(dir), framework: 'laravel', label: 'Laravel', catalog: 'Laravel', platform: 'php' };
+  if (composer && /symfony\/framework-bundle/.test(composer)) return { ...base, name: basename(dir), framework: 'symfony', label: 'Symfony', catalog: 'Symfony', platform: 'php' };
+  if (composer) return { ...base, name: basename(dir), framework: 'php', label: 'PHP', catalog: 'PHP', platform: 'php' };
   const goMod = read(join(dir, 'go.mod'));
   if (goMod !== null) {
     const router = GO_ROUTERS.find((r) => r.module.test(goMod));
@@ -180,6 +184,19 @@ export function detect(dir: string): Project {
   // Rust: Cargo.toml (a crate, or a workspace's binary member) and the framework it depends on.
   const crate = detectRust(dir);
   if (crate) return { ...base, name: crate.name, framework: 'rust', label: crate.label, catalog: crate.catalog, platform: 'rust' };
+  // Dart without Flutter (a Flutter app's pubspec depends on the flutter SDK): a shelf or
+  // dart_frog server, else a command-line tool or desktop program.
+  const pubspec = read(join(dir, 'pubspec.yaml'));
+  if (pubspec !== null && !/^\s+flutter:\s*\n\s+sdk:\s*flutter/m.test(pubspec)) {
+    const dartName = /^name:\s*([\w]+)/m.exec(pubspec)?.[1] ?? basename(dir);
+    const server = /^\s+dart_frog:/m.test(pubspec) ? 'dart_frog' as const : /^\s+shelf:/m.test(pubspec) ? 'shelf' as const : undefined;
+    return {
+      ...base, name: dartName, framework: 'dart', platform: 'dart', dartServer: server,
+      label: server ? `Dart (${server})` : 'Dart',
+      // Add app's two Dart tiles: a server opens on its shelf setup, anything else on plain Dart.
+      catalog: server ? 'Dart (server)' : 'Dart (desktop)',
+    };
+  }
   if (pkg) return { ...base, framework: 'node', label: 'Node.js', catalog: 'Node.js', platform: 'node' };
   // A folder of scripts: PowerShell (*.ps1) or shell (*.sh), whichever there are more of.
   const scripts = detectScripts(dir);
